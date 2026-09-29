@@ -1,3 +1,7 @@
+# Ignore all files except for fixtures and JSON files within fixtures
+!fixtures/
+!fixtures/*.json
+
 # AI Annotations
 .gemini/
 .claude/
