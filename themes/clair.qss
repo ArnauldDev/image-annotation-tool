@@ -1,0 +1,373 @@
+/*
+   IAT - thème « Clair »
+   Thème clair classique, proche de l'apparence standard de Windows.
+
+   Personnalisation : copiez ce fichier (dans themes/ ou themes/<nom>/style.qss),
+   modifiez les couleurs, puis choisissez-le dans « Configuration > Thèmes disponibles »
+   ou chargez-le via « Configuration > Charger un thème personnalisé ».
+
+   Palette utilisée dans ce fichier :
+     fond principal ...... #F0F0F0
+     fond des panneaux ... #FFFFFF
+     bordures ............ #ADADAD
+     texte ............... #1A1A1A
+     accent .............. #0A64A4
+     texte sur accent .... #FFFFFF
+
+   Les directives ci-dessous (commentaires lus par l'application) fixent la couleur des
+   icônes SVG de l'interface : icône « outils » de la barre horizontale et palette
+   graphique des outils ; la seconde, celle des icônes d'un outil actif (fond accent).
+   iat-icon-color: #0A64A4
+   iat-icon-checked-color: #FFFFFF
+*/
+
+/* ---- Fenêtre et conteneurs ------------------------------------------------ */
+QMainWindow, QDialog {
+    background-color: #F0F0F0;
+    color: #1A1A1A;
+}
+
+QWidget {
+    background-color: #F0F0F0;
+    color: #1A1A1A;
+}
+
+QLabel, QCheckBox, QRadioButton {
+    background-color: transparent;
+    color: #1A1A1A;
+}
+
+QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {
+    color: #8A8A8A;
+}
+
+QDockWidget {
+    color: #1A1A1A;
+}
+
+QDockWidget::title {
+    background-color: #FFFFFF;
+    color: #0A64A4;
+    padding: 6px;
+    font-weight: bold;
+    border-bottom: 1px solid #0A64A4;
+}
+
+QGroupBox {
+    color: #1A1A1A;
+    font-weight: bold;
+    border: 1px solid #ADADAD;
+    border-radius: 5px;
+    margin-top: 10px;
+    padding-top: 10px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 5px;
+    color: #0A64A4;
+}
+
+QFrame[frameShape="4"], QFrame[frameShape="5"] {
+    color: #ADADAD;
+}
+
+/* ---- Barre de menus et menus déroulants (sous-menus compris) -------------- */
+QMenuBar {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border-bottom: 1px solid #ADADAD;
+}
+
+QMenuBar::item {
+    background-color: transparent;
+    color: #1A1A1A;
+    padding: 4px 10px;
+}
+
+QMenuBar::item:selected, QMenuBar::item:pressed {
+    background-color: #0A64A4;
+    color: #FFFFFF;
+}
+
+QMenu {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #0A64A4;
+    padding: 4px 0;
+}
+
+QMenu::item {
+    background-color: transparent;
+    color: #1A1A1A;
+    padding: 5px 28px 5px 24px;
+}
+
+QMenu::item:selected {
+    background-color: #0A64A4;
+    color: #FFFFFF;
+}
+
+QMenu::item:disabled {
+    color: #8A8A8A;
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #ADADAD;
+    margin: 4px 8px;
+}
+
+QMenu::indicator {
+    width: 12px;
+    height: 12px;
+    left: 6px;
+    border: 1px solid #ADADAD;
+    background-color: #FFFFFF;
+}
+
+QMenu::indicator:checked {
+    background-color: #0A64A4;
+    border: 1px solid #0A64A4;
+}
+
+/* ---- Barres d'outils et boutons ------------------------------------------ */
+QToolBar {
+    background-color: #FFFFFF;
+    border: none;
+    spacing: 4px;
+    padding: 2px;
+}
+
+QToolBar::separator {
+    background-color: #ADADAD;
+    width: 1px;
+    margin: 4px 6px;
+}
+
+QToolButton {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #0A64A4;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+QToolButton:hover {
+    background-color: #CCE4F7;
+    color: #1A1A1A;
+}
+
+QToolButton:checked, QToolButton:pressed {
+    background-color: #0A64A4;
+    color: #FFFFFF;
+    font-weight: bold;
+}
+
+QToolButton:disabled {
+    background-color: #F0F0F0;
+    color: #8A8A8A;
+    border: 1px solid #ADADAD;
+}
+
+QPushButton {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #0A64A4;
+    border-radius: 4px;
+    padding: 5px 12px;
+}
+
+QPushButton:hover {
+    background-color: #CCE4F7;
+    color: #1A1A1A;
+}
+
+QPushButton:checked, QPushButton:pressed {
+    background-color: #0A64A4;
+    color: #FFFFFF;
+    font-weight: bold;
+}
+
+QPushButton:disabled {
+    background-color: #F0F0F0;
+    color: #8A8A8A;
+    border: 1px solid #ADADAD;
+}
+
+/* ---- Champs de saisie ----------------------------------------------------- */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #0A64A4;
+    border-radius: 3px;
+    padding: 2px 4px;
+    min-height: 22px;
+    selection-background-color: #0A64A4;
+    selection-color: #FFFFFF;
+}
+
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    color: #8A8A8A;
+    border: 1px solid #ADADAD;
+}
+
+/* Le champ de texte interne d'un champ numérique ne doit pas avoir son propre cadre. */
+QAbstractSpinBox QLineEdit {
+    border: none;
+    background-color: transparent;
+    padding: 0;
+    min-height: 0;
+}
+
+/* Boutons « + » / « − » des champs numériques : zones de clic larges et visibles.
+   « @icons/ » désigne le dossier des icônes de l'application ; les SVG référencés
+   ainsi sont teintés automatiquement avec la couleur « iat-icon-color » du thème. */
+QSpinBox, QDoubleSpinBox {
+    padding-right: 22px;
+}
+
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
+    background-color: #FFFFFF;
+    border-left: 1px solid #ADADAD;
+    border-bottom: 1px solid #ADADAD;
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: padding;
+    subcontrol-position: bottom right;
+    width: 22px;
+    background-color: #FFFFFF;
+    border-left: 1px solid #ADADAD;
+}
+
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #CCE4F7;
+}
+
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+    background-color: #0A64A4;
+}
+
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(@icons/plus.svg);
+    width: 10px;
+    height: 10px;
+}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(@icons/minus.svg);
+    width: 10px;
+    height: 10px;
+}
+
+QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off,
+QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off,
+QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off,
+QDoubleSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:off {
+    image: none;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
+    border-left: 1px solid #ADADAD;
+}
+
+QComboBox::down-arrow {
+    image: url(@icons/chevron_down.svg);
+    width: 10px;
+    height: 10px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #0A64A4;
+    selection-background-color: #0A64A4;
+    selection-color: #FFFFFF;
+}
+
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #0A64A4;
+    border-radius: 3px;
+    background-color: #FFFFFF;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #0A64A4;
+}
+
+QCheckBox::indicator:disabled {
+    border: 1px solid #ADADAD;
+    background-color: #F0F0F0;
+}
+
+/* ---- Listes, curseurs, barres de défilement ------------------------------- */
+QListWidget {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #0A64A4;
+}
+
+QListWidget::item:selected {
+    background-color: #0A64A4;
+    color: #FFFFFF;
+}
+
+QSlider::groove:horizontal {
+    background-color: #FFFFFF;
+    height: 4px;
+    border-radius: 2px;
+}
+
+QSlider::handle:horizontal {
+    background-color: #0A64A4;
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    margin: -4px 0;
+}
+
+QScrollBar:vertical {
+    background-color: #FFFFFF;
+    width: 12px;
+}
+
+QScrollBar:horizontal {
+    background-color: #FFFFFF;
+    height: 12px;
+}
+
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background-color: #0A64A4;
+    min-height: 20px;
+    min-width: 20px;
+    border-radius: 4px;
+}
+
+/* ---- Barre d'état et infobulles ------------------------------------------ */
+QStatusBar {
+    background-color: #FFFFFF;
+    color: #0A64A4;
+}
+
+QStatusBar QLabel {
+    color: #0A64A4;
+}
+
+QToolTip {
+    background-color: #FFFFFF;
+    color: #1A1A1A;
+    border: 1px solid #0A64A4;
+    padding: 4px;
+}

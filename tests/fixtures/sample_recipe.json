@@ -1,0 +1,49 @@
+{
+  "source_image": "images/photo-carte-electronique-raw.jpg",
+  "angle": 0.0,
+  "brightness": 10.0,
+  "contrast": 1.2,
+  "crop": null,
+  "export": {
+    "width": 1200,
+    "height": null
+  },
+  "stroke_width": 3,
+  "annotations": [
+    {
+      "type": "rect",
+      "x1": 50.0,
+      "y1": 50.0,
+      "x2": 250.0,
+      "y2": 200.0,
+      "text": "",
+      "color": "#FFFF00",
+      "stroke_width": 3,
+      "font_size": 28
+    },
+    {
+      "type": "label",
+      "x1": 100.0,
+      "y1": 80.0,
+      "x2": 300.0,
+      "y2": 220.0,
+      "text": "Zone test",
+      "color": "#34C759",
+      "stroke_width": 2,
+      "font_size": 24
+    }
+  ],
+  "loupe": {
+    "enabled": false,
+    "center_x": 0.0,
+    "center_y": 0.0,
+    "radius": 120.0,
+    "zoom": 2.0,
+    "arrow_start_x": 0.0,
+    "arrow_start_y": 0.0,
+    "arrow_end_x": 0.0,
+    "arrow_end_y": 0.0,
+    "color": "#66D9EF",
+    "stroke_width": 4
+  }
+}

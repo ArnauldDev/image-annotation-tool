@@ -1,0 +1,30 @@
+# AI Annotations
+.gemini/
+.claude/
+.antigravity/
+.env
+.env.local
+.env.*.local
+# !.env.example
+
+# Ignore .vscode folder
+.vscode/
+
+# Ignore Python virtual environments
+.venv/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Ignore todo list
+todo.md
+debug-img-*.png
+.harness/
+
+# Ignore tools directory
+tools/
