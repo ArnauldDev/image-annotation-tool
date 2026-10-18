@@ -8,7 +8,7 @@
                glisser-déposer d'une image et préréglages de largeur d'export.
   Developer: ArnauldDev
   Created Date: 2026-09-23
-  Last Modified: 2026-09-23
+  Last Modified: 2026-10-19
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ import json
 
 import pytest
 from PIL import Image
-from PyQt6.QtCore import QEvent, QMimeData, QPointF, QUrl, Qt
-from PyQt6.QtGui import QColor, QMouseEvent
+from PyQt6.QtCore import QEvent, QMimeData, QPointF, QRectF, QUrl, Qt
+from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QToolButton
 
 import iat.qt_image_editor as editor
@@ -29,6 +29,7 @@ from iat.qt_image_editor import (
     ImageCanvas,
     ImageEditorWindow,
     LoupeOverlay,
+    TOOL_CROP,
     TOOL_VIEW,
     Translator,
     translator,
@@ -64,7 +65,24 @@ def _rect(x1, y1, x2, y2, color="yellow"):
     return AnnotationItem(kind="rect", start=QPointF(x1, y1), end=QPointF(x2, y2), color=QColor(color))
 
 
+def _number(items):
+    """Donne à chaque annotation un identifiant unique (à partir de 1).
+
+    L'application repère désormais chaque objet par son ``id`` (clés
+    « annotation:<id> » de layer_order, sélection, liste des objets). Les
+    objets créés directement dans un test gardent ``id=0`` et se confondraient
+    tous : il faut les numéroter, comme le fait l'application.
+    """
+    for index, item in enumerate(items, start=1):
+        item.id = index
+    return items
+
+
 def _add(window, *items):
+    next_id = max((annotation.id for annotation in window.canvas.annotations), default=0) + 1
+    for offset, item in enumerate(items):
+        if not item.id:
+            item.id = next_id + offset
     window.canvas.annotations.extend(items)
     window.canvas.annotation_changed.emit()
 
@@ -314,7 +332,7 @@ def test_shift_click_on_the_canvas_extends_the_selection_and_group_drag_moves_al
     canvas.set_preview_image(Image.new("RGB", (200, 150), color="white"))
     canvas.resize(400, 300)
     first, second = _rect(10, 10, 30, 30), _rect(100, 60, 120, 80)
-    canvas.annotations = [first, second]
+    canvas.annotations = _number([first, second])
     canvas.tool = TOOL_VIEW
 
     canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 40, 40))
@@ -330,12 +348,105 @@ def test_shift_click_on_the_canvas_extends_the_selection_and_group_drag_moves_al
     assert second.start == QPointF(110, 65)
 
 
+# ---------------------------------------------------------------------------
+# Sélection par zone (marquee) en mode Déplacer
+# ---------------------------------------------------------------------------
+def _marquee_canvas(*objects):
+    """Canvas 400x300 affichant une preview 200x150 (échelle d'affichage x2)."""
+    canvas = ImageCanvas()
+    canvas.set_preview_image(Image.new("RGB", (200, 150), color="white"))
+    canvas.resize(400, 300)
+    canvas.annotations = _number([obj for obj in objects if isinstance(obj, AnnotationItem)])
+    canvas.loupes = [obj for obj in objects if isinstance(obj, LoupeOverlay)]
+    canvas.tool = TOOL_VIEW
+    return canvas
+
+
+def test_marquee_drag_selects_every_intersected_object(qapp):
+    # Rects image (10,10)-(30,30) et (100,60)-(120,80) -> écran x2.
+    canvas = _marquee_canvas(*(first := _rect(10, 10, 30, 30), second := _rect(100, 60, 120, 80)))
+
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 10, 10))
+    canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 350, 250))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 350, 250))
+
+    assert canvas.selected_objects() == [first, second]
+
+
+def test_marquee_drag_replaces_the_selection_and_shift_adds_to_it(qapp):
+    canvas = _marquee_canvas(*(first := _rect(10, 10, 30, 30), second := _rect(100, 60, 120, 80)))
+
+    # Marquee ne couvrant que le second : la sélection est remplacée.
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 190, 110))
+    canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 350, 250))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 350, 250))
+    assert canvas.selected_objects() == [second]
+
+    # Maj : la zone ajoute le premier à la sélection existante.
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 10, 10, Qt.KeyboardModifier.ShiftModifier))
+    canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 100, 100, Qt.KeyboardModifier.ShiftModifier))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 100, 100, Qt.KeyboardModifier.ShiftModifier))
+    assert set(canvas.selected_objects()) == {first, second}
+
+
+def test_ctrl_marquee_toggles_the_intersected_objects(qapp):
+    canvas = _marquee_canvas(*(first := _rect(10, 10, 30, 30), second := _rect(100, 60, 120, 80)))
+    canvas.set_selection([first, second])
+
+    # Ctrl : le premier est déjà sélectionné -> il est retiré.
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 10, 10, Qt.KeyboardModifier.ControlModifier))
+    canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 100, 100, Qt.KeyboardModifier.ControlModifier))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 100, 100, Qt.KeyboardModifier.ControlModifier))
+    assert canvas.selected_objects() == [second]
+
+    # Ctrl de nouveau : le premier, cette fois non sélectionné, y est ajouté.
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 10, 10, Qt.KeyboardModifier.ControlModifier))
+    canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 100, 100, Qt.KeyboardModifier.ControlModifier))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 100, 100, Qt.KeyboardModifier.ControlModifier))
+    assert set(canvas.selected_objects()) == {first, second}
+
+
+def test_marquee_also_selects_loupes(qapp):
+    first = _rect(10, 10, 30, 30)
+    loupe = LoupeOverlay(center=QPointF(80, 40), radius=20, zoom=2.5)
+    canvas = _marquee_canvas(first, loupe)
+
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 10, 10))
+    canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 220, 140))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 220, 140))
+
+    assert set(canvas.selected_objects()) == {first, loupe}
+
+
+def test_empty_click_deselects_but_leaves_the_objects_untouched(qapp):
+    canvas = _marquee_canvas(_rect(10, 10, 30, 30))
+    canvas.selected_item = canvas.annotations[0]
+
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 390, 290))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 390, 290))
+
+    assert canvas.selected_objects() == []
+    assert canvas.annotations[0].start == QPointF(10, 10)
+
+
+def test_marquee_does_not_interfere_with_drawing_tools(qapp):
+    canvas = _marquee_canvas()
+    canvas.tool = editor.TOOL_RECT
+
+    canvas.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, 10, 130))
+    canvas.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, 60, 145))
+    canvas.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, 60, 145))
+
+    assert len(canvas.annotations) == 1
+    assert canvas.selected_objects() == [canvas.annotations[0]]
+
+
 def test_alignment_between_objects_and_on_the_image(qapp):
     canvas = ImageCanvas()
     canvas.set_preview_image(Image.new("RGB", (200, 150), color="white"))
     canvas.resize(400, 300)
     first, second, third = _rect(10, 10, 30, 30), _rect(50, 40, 90, 60), _rect(150, 100, 160, 110)
-    canvas.annotations = [first, second, third]
+    canvas.annotations = _number([first, second, third])
 
     canvas.set_selection([first, second])
     assert canvas.align_selection("left")
@@ -354,7 +465,7 @@ def test_distribution_spreads_centres_evenly(qapp):
     canvas = ImageCanvas()
     canvas.set_preview_image(Image.new("RGB", (200, 150), color="white"))
     first, middle, last = _rect(0, 0, 10, 10), _rect(20, 0, 30, 10), _rect(90, 0, 100, 10)
-    canvas.annotations = [first, middle, last]
+    canvas.annotations = _number([first, middle, last])
     canvas.set_selection([first, middle])
     assert not canvas.align_selection("hdistribute")  # au moins trois objets
 
@@ -475,12 +586,141 @@ def test_dropping_an_image_file_opens_it(qapp, tmp_path):
     assert window.acceptDrops()
 
 
-def test_export_width_presets(window):
-    assert [button.text() for button in window.export_preset_buttons.values()] == ["800 px", "1200 px", "1920 px"]
-    window.export_preset_buttons[1920].click()
-    assert window.width_spin.value() == 1920
-    assert window.height_spin.value() == 1440  # proportions 4:3 conservées
-    assert window.export_preset_buttons[1920].isChecked()
-    assert not window.export_preset_buttons[800].isChecked()
-    window.width_spin.setValue(1000)
-    assert not any(button.isChecked() for button in window.export_preset_buttons.values())
+def test_export_width_presets(qapp, tmp_path):
+    # L'image doit être au moins aussi large que le plus grand préréglage :
+    # TASK-018 refuse désormais toute largeur supérieure à la source.
+    raw_path = tmp_path / "grande-raw.jpg"
+    Image.new("RGB", (2400, 1800), color="white").save(raw_path, format="JPEG")
+    window = ImageEditorWindow()
+    try:
+        window.load_source_image(raw_path)
+        assert [button.text() for button in window.export_preset_buttons.values()] == ["800 px", "1200 px", "1920 px"]
+        window.export_preset_buttons[1920].click()
+        assert window.width_spin.value() == 1920
+        assert window.height_spin.value() == 1440  # proportions 4:3 conservées
+        assert window.export_preset_buttons[1920].isChecked()
+        assert not window.export_preset_buttons[800].isChecked()
+        window.width_spin.setValue(1000)
+        assert not any(button.isChecked() for button in window.export_preset_buttons.values())
+    finally:
+        window.close()
+
+
+def _key(key: Qt.Key) -> QKeyEvent:
+    return QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier)
+
+
+# ---------------------------------------------------------------------------
+# Tâche 010 : abandon du rognage (ESC / « Supprimer »)
+# ---------------------------------------------------------------------------
+def test_escape_annule_le_rognage_en_cours_sans_l_appliquer(window):
+    canvas = window.canvas
+    canvas.tool = TOOL_CROP
+    # Une zone de rognage a été tracée sur le preview.
+    crop_rect = QRectF(30, 40, 120, 90)
+    canvas.crop_rect = crop_rect
+    canvas.selected_item = "crop"
+    assert canvas.crop_rect is not None
+
+    window.keyPressEvent(_key(Qt.Key.Key_Escape))
+
+    # Le rognage est abandonné : ni le rectangle de preview ni la boîte
+    # pleine résolution ne sont conservés, et rien n'a été appliqué.
+    assert window.canvas.crop_rect is None
+    assert window.crop_box is None
+    assert canvas.selected_item is None
+
+
+def test_touche_supprimer_annule_le_rognage_en_cours(window):
+    canvas = window.canvas
+    canvas.tool = TOOL_CROP
+    crop_rect = QRectF(30, 40, 120, 90)
+    canvas.crop_rect = crop_rect
+    canvas.selected_item = "crop"
+    assert canvas.crop_rect is not None
+
+    window.delete_selected_object()
+
+    assert window.canvas.crop_rect is None
+    assert window.crop_box is None
+    assert canvas.selected_item is None
+
+
+def test_clic_droit_supprimer_annule_rognage_quand_aucun_objet_selectionne(window):
+    canvas = window.canvas
+    canvas.tool = TOOL_CROP
+    crop_rect = QRectF(30, 40, 120, 90)
+    canvas.crop_rect = crop_rect
+    canvas.selected_item = "crop"
+    window.objects_list.clearSelection()
+    assert not window.canvas.selected_objects()
+
+    window.delete_selected_object()
+
+    assert window.canvas.crop_rect is None
+    assert window.crop_box is None
+
+
+def test_touche_supprimer_sans_rognage_ne_modifie_rien(window):
+    assert window.canvas.crop_rect is None
+    assert window.crop_box is None
+    window.delete_selected_object()
+    assert window.canvas.crop_rect is None
+    assert window.crop_box is None
+
+
+def test_le_rognage_peut_toujours_etre_applique(window):
+    canvas = window.canvas
+    canvas.tool = TOOL_CROP
+    crop_rect = QRectF(30, 40, 120, 90)
+    canvas.crop_rect = crop_rect
+    canvas.selected_item = "crop"
+
+    window.apply_crop()
+
+    assert window.crop_box is not None
+    assert window.canvas.crop_rect is None
+
+
+# ---------------------------------------------------------------------------
+# Tâche 010 : abandon du rognage en cours préserve le rognage précédent
+# ---------------------------------------------------------------------------
+def test_escape_annule_rognage_en_cours_preserve_crop_precedent(window):
+    canvas = window.canvas
+    canvas.tool = TOOL_CROP
+    # Un rognage a déjà été appliqué et est conservé dans crop_box.
+    window.crop_box = (10, 20, 300, 200)
+    # L'utilisateur en dessine un nouveau et souhaite l'abandonner.
+    crop_rect = QRectF(30, 40, 120, 90)
+    canvas.crop_rect = crop_rect
+    canvas.selected_item = "crop"
+    assert canvas.crop_rect is not None
+    assert window.crop_box is not None
+
+    window.keyPressEvent(_key(Qt.Key.Key_Escape))
+
+    # Le rognage en cours est abandonné, le précédent est conservé intact.
+    assert window.canvas.crop_rect is None
+    assert window.crop_box == (10, 20, 300, 200)
+    assert canvas.selected_item is None
+
+
+def test_supprimer_annule_rognage_en_cours_preserve_crop_precedent(window):
+    canvas = window.canvas
+    canvas.tool = TOOL_CROP
+    # Un rognage a déjà été appliqué et est conservé dans crop_box.
+    window.crop_box = (10, 20, 300, 200)
+    # L'utilisateur en dessine un nouveau et souhaite l'abandonner.
+    crop_rect = QRectF(30, 40, 120, 90)
+    canvas.crop_rect = crop_rect
+    canvas.selected_item = "crop"
+    window.objects_list.clearSelection()
+    assert not window.canvas.selected_objects()
+    assert window.crop_box is not None
+
+    window.delete_selected_object()
+
+    # Le rognage en cours est abandonné, le précédent est conservé intact.
+    assert window.canvas.crop_rect is None
+    assert window.crop_box == (10, 20, 300, 200)
+    assert canvas.selected_item is None

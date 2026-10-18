@@ -2,7 +2,7 @@
 # File Name: image_processor.py
 # Description: Moteur de traitement d'image et recette JSON (annotations, loupes, export).
 # Developer: ArnauldDev
-# Last Modified: 2026-09-23
+# Last Modified: 2026-10-19
 
 from __future__ import annotations
 
@@ -12,12 +12,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 #: Default longest-side dimension used for the low-resolution preview shown
 #: in the interactive editor. Working on this much smaller image keeps the
 #: UI fluid regardless of the resolution of the source photograph.
 DEFAULT_PREVIEW_MAX_DIMENSION = 1600
+
+#: Fond des étiquettes (et des cercles numérotés), RGB partagé entre
+#: l'aperçu de l'éditeur (avec alpha) et le rendu pleine résolution.
+LABEL_BACKGROUND_RGB = (20, 24, 33)
 
 
 def load_image(path: str | Path) -> Image.Image:
@@ -260,6 +264,9 @@ class Annotation:
     #: "line" only: draw an arrowhead at the start/end point.
     line_arrow_start: bool = False
     line_arrow_end: bool = False
+    #: "circle" only: render ``text`` as an auto-incremented number inside
+    #: the circle, on the shared label background (numbering mode).
+    numbered: bool = False
     #: Unique, auto-incremented identifier of the annotation inside its
     #: recipe. Referenced from ``ProcessingRecipe.layer_order`` as
     #: ``"annotation:<id>"``. Older JSON files predate this field; see
@@ -292,6 +299,7 @@ class Annotation:
             "bold_text": self.bold_text,
             "line_arrow_start": self.line_arrow_start,
             "line_arrow_end": self.line_arrow_end,
+            "numbered": self.numbered,
         }
 
     @staticmethod
@@ -315,6 +323,7 @@ class Annotation:
             bold_text=bool(data.get("bold_text", False)),
             line_arrow_start=bool(data.get("line_arrow_start", False)),
             line_arrow_end=bool(data.get("line_arrow_end", False)),
+            numbered=bool(data.get("numbered", False)),
             id=int(data.get("id", 1)),
         )
 
@@ -343,6 +352,9 @@ class LoupeSpec:
     rotation: float = 0.0
     #: Thickness of the arrow pointing to the magnified target, independent of stroke_width.
     arrow_stroke_width: int = 2
+    #: Luminosité locale du contenu agrandi (-100 à 100, facteur 1 + valeur/100),
+    #: indépendante de la luminosité globale de la recette.
+    brightness: float = 0.0
     #: Unique, auto-incremented identifier of the loupe inside its recipe.
     id: int = 1
 
@@ -367,6 +379,7 @@ class LoupeSpec:
             "stroke_width": self.stroke_width,
             "rotation": self.rotation,
             "arrow_stroke_width": self.arrow_stroke_width,
+            "brightness": self.brightness,
         }
 
     @staticmethod
@@ -385,6 +398,7 @@ class LoupeSpec:
             stroke_width=int(data.get("stroke_width", 4)),
             rotation=float(data.get("rotation", 0.0)),
             arrow_stroke_width=int(data.get("arrow_stroke_width", 2)),
+            brightness=float(data.get("brightness", 0.0)),
             id=int(data.get("id", 1)),
         )
 
@@ -445,6 +459,9 @@ class ProcessingRecipe:
     export_width: Optional[int] = None
     export_height: Optional[int] = None
     stroke_width: int = 3
+    #: Prochain numéro posé par le mode « Numérotation » de l'outil Cercle.
+    #: Rétrocompatible : un JSON sans la clé repart à 1.
+    circle_counter: int = 1
     annotations: list[Annotation] = field(default_factory=list)
     #: Magnifier overlays, each identified by a unique ``id``.
     loupes: list[LoupeSpec] = field(default_factory=list)
@@ -469,6 +486,7 @@ class ProcessingRecipe:
             "crop": list(self.crop) if self.crop is not None else None,
             "export": {"width": self.export_width, "height": self.export_height},
             "stroke_width": self.stroke_width,
+            "circle_counter": self.circle_counter,
             "annotations": [a.to_dict() for a in self.annotations],
             "loupes": [loupe.to_dict() for loupe in self.loupes],
             "custom_colors": list(self.custom_colors),
@@ -519,6 +537,7 @@ class ProcessingRecipe:
             export_width=export.get("width"),
             export_height=export.get("height"),
             stroke_width=int(data.get("stroke_width", 3)),
+            circle_counter=max(1, int(data.get("circle_counter", 1))),
             annotations=annotations,
             loupes=loupes,
             custom_colors=[str(color) for color in data.get("custom_colors", [])],
@@ -627,7 +646,7 @@ def draw_annotations(image: Image.Image, annotations: list[Annotation]) -> Image
             right = text_box[2] + padding
             bottom = text_box[3] + padding
             box = (left, top, right, bottom)
-            fill = (20, 24, 33) if item.fill_enabled else None
+            fill = LABEL_BACKGROUND_RGB if item.fill_enabled else None
             if item.shape == "round":
                 draw.ellipse(box, fill=fill, outline=item.color, width=item.stroke_width)
             else:
@@ -653,11 +672,16 @@ def draw_annotations(image: Image.Image, annotations: list[Annotation]) -> Image
             else:
                 draw.rectangle(bbox, outline=item.color, width=item.stroke_width)
         elif item.type == "circle":
-            draw.ellipse(
-                (min(item.x1, item.x2), min(item.y1, item.y2), max(item.x1, item.x2), max(item.y1, item.y2)),
-                outline=item.color,
-                width=item.stroke_width,
-            )
+            bbox = (min(item.x1, item.x2), min(item.y1, item.y2), max(item.x1, item.x2), max(item.y1, item.y2))
+            # Cercle numéroté : fond des étiquettes + numéro blanc centré,
+            # police dimensionnée depuis le diamètre pour rester proportionnelle.
+            fill = LABEL_BACKGROUND_RGB if item.numbered else None
+            draw.ellipse(bbox, fill=fill, outline=item.color, width=item.stroke_width)
+            if item.numbered and item.text:
+                diameter = max(abs(item.x2 - item.x1), abs(item.y2 - item.y1))
+                number_font = _load_font(max(10, int(diameter * 0.5)))
+                center_x, center_y = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+                draw.text((center_x, center_y), item.text, fill=(255, 255, 255), font=number_font, anchor="mm")
         elif item.type == "line":
             draw.line((item.x1, item.y1, item.x2, item.y2), fill=item.color, width=item.stroke_width)
             if item.line_arrow_start:
@@ -756,6 +780,14 @@ def draw_loupe(image: Image.Image, loupe: LoupeSpec) -> Image.Image:
         # positive value matches the clockwise convention used in the UI.
         crop = crop.rotate(-loupe.rotation, resample=Image.Resampling.BICUBIC, expand=False)
     zoomed = crop.resize((radius * 2, radius * 2), Image.Resampling.LANCZOS)
+    if loupe.brightness:
+        # Luminosité locale de la loupe : même formule que l'aperçu
+        # (facteur 1 + luminosité/100), appliquée après l'agrandissement et
+        # limitée aux canaux RGB pour préserver la transparence éventuelle.
+        alpha = zoomed.getchannel("A")
+        bright = apply_brightness_contrast(zoomed.convert("RGB"), brightness=loupe.brightness, contrast=1.0)
+        zoomed = bright.convert("RGBA")
+        zoomed.putalpha(alpha)
 
     # Build the circular mask at the exact size of the zoomed patch so that
     # Image.paste receives a mask matching the pasted region, not the full
@@ -793,6 +825,9 @@ def apply_recipe(image: Image.Image, recipe: ProcessingRecipe) -> Image.Image:
     brightness/contrast, annotations, loupe overlay, then final resize. This
     is the single source of truth used both by the interactive preview and
     by the headless/batch script path, guaranteeing identical results.
+
+    The exported result never exceeds the source image dimensions, whatever
+    ``export_width``/``export_height`` say (oversized values are clamped).
     """
     processed = image
     if recipe.angle:
@@ -805,7 +840,27 @@ def apply_recipe(image: Image.Image, recipe: ProcessingRecipe) -> Image.Image:
         processed = processed.crop((int(x1), int(y1), int(x2), int(y2)))
     processed = apply_brightness_contrast(processed, brightness=recipe.brightness, contrast=recipe.contrast)
     processed = draw_layers(processed, recipe.annotations, recipe.loupes, recipe.layer_order)
-    processed = resize_with_aspect_ratio(processed, width=recipe.export_width, height=recipe.export_height)
+
+    # La taille d'export ne peut jamais dépasser l'image source (TASK-018).
+    # On borne d'abord la demande pour éviter un agrandissement
+    # intermédiaire démesuré, puis on garantit le cadrage final en
+    # comparant les dimensions triées : une rotation avec expand échange
+    # parfois largeur/hauteur sans agrandir le contenu ((200, 300) issu
+    # d'une source (300, 200) reste valide).
+    limit = max(image.size)
+    width = recipe.export_width
+    height = recipe.export_height
+    if width is not None and width > limit:
+        width = limit
+    if height is not None and height > limit:
+        height = limit
+    processed = resize_with_aspect_ratio(processed, width=width, height=height)
+
+    source_long, source_short = sorted(image.size, reverse=True)
+    result_long, result_short = sorted(processed.size, reverse=True)
+    if result_long > source_long or result_short > source_short:
+        box = (source_long, source_short) if processed.width >= processed.height else (source_short, source_long)
+        processed = ImageOps.contain(processed, box, Image.Resampling.LANCZOS)
     return processed
 
 

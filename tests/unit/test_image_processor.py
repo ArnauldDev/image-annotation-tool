@@ -8,6 +8,7 @@ from iat.image_processor import (
     LoupeSpec,
     ProcessingRecipe,
     apply_brightness_contrast,
+    apply_recipe,
     apply_trapezoid_correction,
     draw_annotations,
     draw_loupe,
@@ -34,6 +35,43 @@ def test_resize_with_aspect_ratio_prefers_width_when_two_values_are_given():
 
     resized_when_both_given = resize_with_aspect_ratio(image, width=200, height=60)
     assert resized_when_both_given.size == (200, 100)
+
+
+def test_apply_recipe_never_exceeds_the_source_image(tmp_path):
+    # TASK-018 : une taille d'export plus grande que la source est bornée.
+    source = tmp_path / "source-raw.jpg"
+    Image.new("RGB", (600, 480), color="grey").save(source, format="JPEG")
+    recipe = ProcessingRecipe(source_image=str(source), export_width=4000, export_height=3000)
+
+    result = apply_recipe(load_image(source), recipe)
+
+    assert result.size == (600, 480)
+
+
+def test_apply_recipe_fits_rotated_content_within_the_source_dimensions(tmp_path):
+    # Une rotation à 45° agrandit le canevas (expand) : le résultat final
+    # reste borné par les dimensions triées de la source.
+    source = tmp_path / "source-raw.jpg"
+    Image.new("RGB", (600, 480), color="grey").save(source, format="JPEG")
+    recipe = ProcessingRecipe(source_image=str(source), angle=45.0, export_width=600)
+
+    result = apply_recipe(load_image(source), recipe)
+
+    result_long, result_short = sorted(result.size, reverse=True)
+    assert result_long <= 600
+    assert result_short <= 480
+
+
+def test_apply_recipe_preserves_a_quarter_turn_swap(tmp_path):
+    # Un quart de tour échange largeur/hauteur sans agrandir le contenu :
+    # (600, 480) -> (480, 600) reste strictement équivalent à la source.
+    source = tmp_path / "source-raw.jpg"
+    Image.new("RGB", (600, 480), color="grey").save(source, format="JPEG")
+    recipe = ProcessingRecipe(source_image=str(source), angle=90.0)
+
+    result = apply_recipe(load_image(source), recipe)
+
+    assert result.size == (480, 600)
 
 
 def test_rotation_and_brightness_are_applied_without_changing_size():
@@ -151,3 +189,28 @@ def test_loupe_zooms_the_arrow_target_not_its_display_position():
     # Sample slightly off-centre to avoid the arrow line itself, which is
     # legitimately drawn across the loupe's centre point.
     assert rendered.getpixel((85, 20))[0] > 200
+
+
+def test_loupe_local_brightness_is_applied_on_export():
+    image = Image.new("RGB", (120, 120), (100, 100, 100))
+    base = dict(
+        enabled=True,
+        center_x=60,
+        center_y=60,
+        radius=20,
+        zoom=2.0,
+        arrow_start_x=60,
+        arrow_start_y=60,
+        arrow_end_x=60,
+        arrow_end_y=60,
+    )
+
+    plain = draw_loupe(image, LoupeSpec(**base))
+    brighter = draw_loupe(image, LoupeSpec(**base, brightness=50.0))
+    darker = draw_loupe(image, LoupeSpec(**base, brightness=-50.0))
+
+    # Intérieur du disque, loin de l'anneau et de la flèche :
+    # 100 × 1.5 = 150 et 100 × 0.5 = 50 (facteur 1 + luminosité/100).
+    assert plain.getpixel((60, 50)) == (100, 100, 100)
+    assert brighter.getpixel((60, 50)) == (150, 150, 150)
+    assert darker.getpixel((60, 50)) == (50, 50, 50)

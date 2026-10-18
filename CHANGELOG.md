@@ -9,6 +9,42 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 > `TASKS.md` et n'est volontairement pas repris ici, afin de ne pas alourdir le suivi
 > des évolutions courantes.
 
+## [Unreleased]
+
+## [1.0.1] - 2026-10-19
+
+## ✨ Nouveautés
+
+**Édition d'image**
+
+- Les curseurs de luminosité et de contraste sont désormais affichés dans le panneau de transformation de droite (TASK-007)
+- Ajout d'un curseur de luminosité dans l'outil loupe pour un ajustement local (TASK-011)
+- Possibilité d'annuler un recadrage en cours avec la touche Échap ou le menu contextuel dans l'outil Transformation (TASK-010)
+
+**Outil cercle**
+
+- Nouveau mode de numérotation auto-incrémentée pour les cercles, avec tests et documentation (TASK-012)
+- La taille des cercles numérotés est désormais pilotée par le champ de rayon (TASK-014)
+
+**Sélection et organisation**
+
+- Nouveaux raccourcis Ctrl+Haut / Ctrl+Bas pour réordonner les objets sélectionnés (TASK-009)
+- Sélection par rectangle (rubber-band) en mode Déplacer (TASK-015)
+
+**Export et navigation**
+
+- Les préréglages d'export sont maintenant affichés en premier dans les options d'export (TASK-008)
+- Nouvelle option de menu pour ouvrir le dossier de l'image courante (TASK-016)
+
+## 🐛 Corrections
+
+- Le recadrage enregistré est conservé lorsqu'on abandonne une modification de recadrage en cours (TASK-010)
+- La contrainte de proportions avec Maj fonctionne désormais pour le dessin, la reprise et le redimensionnement des rectangles et cercles (TASK-013)
+- Le compteur de numérotation des cercles est réinitialisé à l'ouverture d'une nouvelle image (TASK-017)
+- Il n'est plus possible de saisir une taille d'export supérieure à celle de l'image d'origine (TASK-018)
+
+---
+
 ## [1.0.0] - 2026-09-28
 
 ### Ajouté

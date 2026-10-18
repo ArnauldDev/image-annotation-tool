@@ -1,23 +1,13 @@
 <!--
   File Name: README.md
-  Description: Présentation générale, démarrage rapide et index de la documentation d'Image Annotation Tool (IAT).
+  Description: Présentation générale, démarrage rapide et documentation de l'application **Image Annotation Tool (IAT)**.
   Developer: ArnauldDev
-  Created Date: 2026-09-08
-  Last Modified: 2026-09-27
+  Created Date: 2026-08-29
+  Last Modified: 2026-09-30
 -->
 
-<!-- Ajouter les badges de développement : -->
-<!-- ![État de développement : en cours](https://img.shields.io/badge/development-in_progress-yellow)
-![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-yellow)
-![Licence GNU GPLv3](https://img.shields.io/badge/license-GNU_GPLv3-blue)
-![Python](https://img.shields.io/badge/python-3.14-3776AB)
-![PyQt6](https://img.shields.io/badge/pyqt6-6.11-blue)
-![Pillow](https://img.shields.io/badge/pillow-12.3-blue)
-![Vibe Coded](https://img.shields.io/badge/development-vibe_coded-7a22ce)
-![AI Assisted](https://img.shields.io/badge/code-AI_assisted-blue) -->
-
 <!-- Badges de statut et version -->
-![Status](https://img.shields.io/badge/status-in__progress-yellow)
+![Status](https://img.shields.io/badge/status-in__progress-green)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Licence](https://img.shields.io/badge/license-GNU__GPLv3-blue)
 
@@ -32,7 +22,7 @@
 
 <h3>Image Annotation Tool (IAT)</h3>
 
-Application de bureau en Python (**PyQt6** + **Pillow**) pour **annoter, documenter et transformer des photographies techniques et scientifiques**, développée par le **Plateau Technique Mécatronique** du **Centre de Biologie Intégrative (CBI), CNRS / Université de Toulouse**.
+Application de bureau en Python (**PyQt6** + **Pillow**) pour **annoter, documenter et transformer des photographies techniques et scientifiques**, développée par le **[Plateau Technique Mécatronique](https://cbi-toulouse.fr/plateau-mecatronique/)** du **[Centre de Biologie Intégrative (CBI), CNRS / Université de Toulouse](https://www.utoulouse.fr/structures-de-recherche/centre-de-biologie-integrative)**.
 
 ## À propos d'IAT
 
@@ -77,7 +67,7 @@ Chaque étape reste modifiable à tout moment, ce qui permet de se concentrer su
 
 - Étiquettes texte avec flèche, rectangles, cercles et lignes fléchées ; couleur, épaisseur, coins arrondis, fond, gras…
 - **Plusieurs loupes** par image : médaillons circulaires grossissants (1× à 8×, réglable à la molette) reliés à la zone agrandie par une flèche.
-- Accrochage à la grille en maintenant **`Ctrl`** ; formes parfaites et angles de 45° avec **`Shift`**.
+- Accrochage à la grille en maintenant **`Ctrl`** ; formes parfaites (dessin **et** redimensionnement) et angles de 45° avec **`Shift`**.
 
 ### Édition
 
@@ -165,13 +155,13 @@ Sans suffixe `-raw`, le suffixe `-iat` est simplement ajouté (`photo.png` → `
 
 **[Copyright (c) 2026 BIGANZOLI Arnauld, CBI FR 3743 CNRS-UT3](https://cbi-toulouse.fr/plateau-mecatronique/)**
 
-Ce projet est distribué sous licence libre **Apache License 2.0**. Consultez le fichier [`LICENSE`](LICENSE) pour plus d'informations.
+Ce projet est distribué sous licence libre **GPL-3.0-or-later**. Consultez le fichier [`NOTICE`](NOTICE.md) pour plus d'informations, comme la liste des dépendances et leurs licences respectives.
 
 ---
 
 ## Développement assisté par IA (Vibe coding)
 
-Une grande partie de l'architecture et du code de cette application a été générée via une démarche de vibe coding à l'aide d'assistants IA (ex. Claude, ChatGPT, Cursor).
+Une grande partie de l'architecture et du code de cette application a été générée via une démarche de vibe coding à l'aide d'assistants IA (ex. Claude, ChatGPT, Gemini et Copilot).
 
 - **Ce qui a été généré :** Code source principal, scripts d'automatisation, tests unitaires.
 - **Ce qui a été supervisé :** Validation fonctionnelle, intégration et revue du code.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
   File Name: test_multi_loupe.py
-  Description: Tests des loupes multiples (identifiants, JSON, rendu) et de la sauvegarde
-               en direct de l'épaisseur du contour d'une loupe.
+  Description: Tests des loupes multiples (identifiants, JSON, rendu), de la sauvegarde
+               en direct de l'épaisseur du contour et de la luminosité locale.
   Developer: ArnauldDev
   Created Date: 2026-09-23
 """
@@ -13,11 +13,12 @@ import json
 
 import pytest
 from PIL import Image
-from PyQt6.QtCore import QPointF
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import QColor, QImage, QPainter
 from PyQt6.QtWidgets import QApplication
 
 from iat.image_processor import LoupeSpec, ProcessingRecipe, draw_layers, next_loupe_id
-from iat.qt_image_editor import ImageEditorWindow, LoupeOverlay, TOOL_LOUPE
+from iat.qt_image_editor import ImageCanvas, ImageEditorWindow, LoupeOverlay, TOOL_LOUPE
 
 
 @pytest.fixture(scope="module")
@@ -196,3 +197,86 @@ def test_loupe_stroke_width_is_saved_live_and_round_trips(qapp, tmp_path):
     assert reloaded.loupe_radius_spin.value() == loupe.radius
     reloaded.loupe_stroke_width_spin.setValue(8)
     assert ProcessingRecipe.load(window.current_json_path).loupes[0].stroke_width == 16
+
+
+# ---------------------------------------------------------------------------
+# Luminosité locale de la loupe (indépendante de la luminosité globale)
+# ---------------------------------------------------------------------------
+def test_loupe_brightness_round_trips_and_defaults_for_legacy_json():
+    recipe = ProcessingRecipe(loupes=[LoupeSpec(id=1, enabled=True, brightness=35.0)])
+
+    data = json.loads(recipe.to_json())
+    assert data["loupes"][0]["brightness"] == 35.0
+
+    reloaded = ProcessingRecipe.from_json(recipe.to_json())
+    assert reloaded.loupes[0].brightness == 35.0
+
+    # Rétrocompatibilité : un ancien JSON sans la clé "brightness" se charge
+    # avec la valeur 0 (aucun réglage).
+    legacy = ProcessingRecipe.from_dict({"loupes": [{"id": 1, "enabled": True}]})
+    assert legacy.loupes[0].brightness == 0.0
+
+
+def test_loupe_brightness_slider_follows_the_selected_loupe_and_saves_live(qapp, tmp_path):
+    window = _window_with_image(tmp_path)
+    first = window.create_new_loupe()
+    second = window.create_new_loupe()
+    first.brightness = 40.0
+    window.refresh_objects_list()
+
+    window.canvas.item_selected.emit(first)
+    assert window.loupe_brightness_slider.value() == 40
+
+    window.loupe_brightness_slider.setValue(-25)
+    assert first.brightness == -25
+    assert second.brightness == 0.0
+    saved = ProcessingRecipe.load(window.current_json_path)
+    assert saved.loupes[0].brightness == -25.0
+    assert saved.loupes[1].brightness == 0.0
+
+    window.canvas.item_selected.emit(second)
+    assert window.loupe_brightness_slider.value() == 0
+
+
+def test_new_loupe_inherits_the_brightness_of_the_current_one(qapp, tmp_path):
+    window = _window_with_image(tmp_path)
+    window.create_new_loupe()
+    window.loupe_brightness_slider.setValue(30)
+    assert window.canvas.loupes[0].brightness == 30
+
+    second = window.create_new_loupe()
+
+    assert second.brightness == 30
+
+
+def test_loupe_local_brightness_adjusts_the_preview_disc(qapp):
+    canvas = ImageCanvas()
+    canvas.set_preview_image(Image.new("RGB", (100, 100), color=(120, 120, 120)))
+    loupe = LoupeOverlay(
+        id=1,
+        center=QPointF(50, 50),
+        radius=30,
+        zoom=2.0,
+        arrow=(QPointF(50, 50), QPointF(50, 50)),
+    )
+    canvas.loupes = [loupe]
+    bounds = QRectF(0, 0, 100, 100)
+
+    def sample() -> tuple[int, int, int]:
+        rendered = QImage(100, 100, QImage.Format.Format_RGB32)
+        rendered.fill(QColor("black"))
+        painter = QPainter(rendered)
+        canvas.paint_loupe(painter, bounds, loupe)
+        painter.end()
+        color = rendered.pixelColor(50, 35)  # dans le disque, loin de l'anneau
+        return color.red(), color.green(), color.blue()
+
+    baseline = sample()
+    loupe.brightness = 60.0
+    brighter = sample()
+    loupe.brightness = -60.0
+    darker = sample()
+
+    assert baseline[0] == pytest.approx(120, abs=2)
+    assert brighter[0] > baseline[0] + 50  # 120 × 1.6 ≈ 192
+    assert darker[0] < baseline[0] - 50  # 120 × 0.4 ≈ 48

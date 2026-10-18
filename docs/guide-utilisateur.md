@@ -82,6 +82,7 @@ Le bouton `Transformation` affiche les réglages géométriques de l'image :
 | **Rotation**                        | `⟲ 90°` / `⟳ 90°`, angle fin de −45° à +45°, `Réinitialiser la rotation`                                                                        |
 | **Correction trapézoïdale**         | Corrige la perspective sur chacun des quatre bords (supérieur, inférieur, gauche, droit)                                                        |
 | **Rognage**                         | Glissez sur l'image pour dessiner la zone à conserver, ajustez-la avec ses poignées, puis `Appliquer le rognage` (`Réinitialiser` pour annuler) |
+| **Luminosité / Contraste**          | Deux sliders (−100 à +100 et 0,01× à 3×), visibles directement dans le panneau Transformation, application en temps réel |
 
 La luminosité (−100 à +100) et le contraste (0,01× à 3×) se règlent dans le panneau `Luminosité / Contraste`, accessible depuis l'entrée correspondante de la liste des objets.
 
@@ -98,7 +99,7 @@ Le bouton `Annotation` regroupe quatre formes, choisies en haut du panneau :
 | :------------ | :------------------------------------------------------------------------------------------------ | :--------------------------------------- |
 | **Étiquette** | Glissez de l'emplacement du texte vers l'élément désigné : un cadre avec texte et flèche est créé | —                                        |
 | **Rectangle** | Glissez pour encadrer une zone d'intérêt                                                          | `Shift` : carré parfait                  |
-| **Cercle**    | Glissez pour entourer une zone (ovale)                                                            | `Shift` : cercle parfait                 |
+| **Cercle**    | Glissez pour entourer une zone (ovale), ou **cliquez** en mode `Numérotation` pour poser un cercle numéroté | `Shift` : cercle parfait                 |
 | **Ligne**     | Glissez pour tracer une ligne ; flèches optionnelles au début et/ou à la fin                      | `Shift` : angle contraint par pas de 45° |
 
 Options disponibles selon la forme :
@@ -111,6 +112,16 @@ Options disponibles selon la forme :
 La couleur et les options s'appliquent au prochain objet créé **et** à l'objet sélectionné.
 
 Pour **modifier le texte** d'une étiquette, double-cliquez dessus.
+
+### Mode « Numérotation » (forme Cercle)
+
+Avec la forme **Cercle** sélectionnée, le bouton `Numérotation` active un mode de pose rapide pour annoter repère par repère :
+
+1. **Cliquez** sur l'image : un **cercle parfait** de diamètre fixe est posé, centré sur le clic, portant le **numéro suivant** (fond sombre comme les étiquettes, chiffre blanc).
+2. Le **Compteur** affiche le prochain numéro posé ; le bouton `RAZ` le remet à 1.
+3. Le cercle se redimensionne ensuite avec ses poignées, en conservant la proportion de **cercle parfait**. La couleur et l'épaisseur du contour se règlent avec les contrôles habituels.
+
+Le compteur est enregistré dans la recette : rouvrir l'image reprend la numérotation là où elle s'est arrêtée. Le bouton `Numérotation` n'est utilisable que lorsque l'outil Cercle est sélectionné, et cliquer sur un cercle déjà posé le sélectionne (au lieu d'en créer un nouveau).
 
 ## 5. Outil « Loupe »
 
@@ -132,6 +143,7 @@ Une loupe est un médaillon circulaire qui montre une zone agrandie de l'image, 
 | `Épaisseur du contour`        | Épaisseur du cercle (1 à 20 px)                                           |
 | `Épaisseur de la flèche`      | Épaisseur de la flèche, indépendante du contour                           |
 | `⟲ 90°` / `⟳ 90°`, `Rotation` | Fait pivoter **le contenu agrandi** seulement (−180° à +180°)             |
+| `Luminosité de la loupe`      | Éclaircit ou assombrit **le contenu agrandi** (−100 à 100), indépendamment de la luminosité globale de l'image |
 | `Palette de couleur`          | Couleur du contour et de la flèche                                        |
 
 Avec l'outil loupe actif, la molette agit sur la loupe située sous le curseur (sinon sur la loupe sélectionnée).
@@ -144,6 +156,8 @@ Avec l'outil loupe actif, la molette agit sur la loupe située sous le curseur (
 ### Déplacer un objet sur l'image
 
 Cliquez-glissez le contour d'un objet déjà placé pour le déplacer : corps d'une étiquette, médaillon d'une loupe, pointe d'une flèche, coin d'un rectangle, zone de rognage… Ce déplacement fonctionne quel que soit l'outil actif. `Échap` désactive l'outil courant.
+
+Avec l'outil **Rectangle** ou **Cercle**, `Shift` maintenu garde la forme parfaitement proportionnée (carré / cercle) **dès la pression**, y compris si le tracé commence sur une forme existante ou si vous redimensionnez une forme par ses poignées ; le `Shift+clic` reprend alors le dessin au lieu d'ajouter l'objet à la sélection. Avec les autres outils (dont `Déplacer`), `Shift+clic` ajoute toujours l'objet à la sélection.
 
 ### Liste des annotations
 
@@ -202,8 +216,9 @@ L'accrochage à la grille est actif **uniquement tant que la touche `Ctrl` est m
 | `Suppr` (ou `Retour arrière`)           | Supprimer les objets sélectionnés                        |
 | `Échap`                                 | Désactiver l'outil courant                               |
 | `Ctrl` maintenu                         | Accrocher à la grille pendant un tracé ou un déplacement |
-| `Shift` maintenu                        | Carré / cercle parfait, ligne contrainte à 45°           |
-| `Shift+clic` / `Ctrl+clic`              | Sélection multiple dans la liste des annotations         |
+| `Shift` maintenu                        | Carré / cercle parfait (dessin **et** redimensionnement), ligne contrainte à 45° |
+| `Shift+clic` / `Ctrl+clic`              | Sélection multiple dans la liste des annotations ; sur l'image avec les outils autres que Rectangle/Cercle |
+| `Ctrl + ↑` / `Ctrl + ↓`                 | Réordonner les objets sélectionnés dans la liste        |
 | Double-clic sur une étiquette           | Modifier son texte                                       |
 | Molette (outil loupe)                   | Régler le zoom de la loupe                               |
 | Clic droit sur l'image                  | Menu d'alignement, de distribution, copier/coller        |

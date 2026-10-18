@@ -1,0 +1,230 @@
+# ===================================================================
+#  File Name: .gitlab-ci.yml
+#  Description: Pipeline GitLab CI/CD d'Image Annotation Tool (IAT) :
+#               tests -> construction des exécutables -> publication.
+#               Documentation détaillée : docs/gitlab-ci-cd.md
+#  Developer: ArnauldDev
+#  Created Date: 2026-09-23
+#  Last Modified: 2026-10-19
+# ===================================================================
+#
+# Résumé :
+#   - test    : pytest sous Linux (conteneur Docker, Qt en mode « offscreen »),
+#               à chaque push, merge request et étiquette ;
+#   - build   : exécutables PyInstaller pour Linux, Windows et macOS.
+#               PyInstaller ne fait pas de compilation croisée : chaque job
+#               tourne sur un runner du système visé (étiquettes « linux »,
+#               « windows », « macos »). Automatique sur une étiquette vX.Y.Z,
+#               manuel sinon (sur main et dev) ;
+#   - release : crée la Release GitLab avec les liens vers les exécutables,
+#               uniquement sur une étiquette vX.Y.Z.
+
+stages:
+  - test
+  - build
+  - release
+
+variables:
+  PYTHON_VERSION: "3.14"
+  # Cache pip dans le dossier du projet pour pouvoir le mettre en cache GitLab.
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+# Évite les pipelines en double (branche + merge request) : pipeline de MR
+# lorsqu'une MR est ouverte, pipeline de branche sinon, et pipeline d'étiquette.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# -------------------------------------------------------------------
+# Modèles réutilisables
+# -------------------------------------------------------------------
+
+# Conteneur Debian avec les bibliothèques système nécessaires à Qt 6.
+.linux_qt:
+  image: bin.koda.cnrs.fr/docker-ci/python:${PYTHON_VERSION}-slim
+  cache:
+    key: "pip-linux-$CI_JOB_NAME"
+    paths:
+      - .cache/pip
+  before_script:
+    - apt-get update -qq
+    # libgl1/libegl1 : OpenGL ; libxkbcommon0 : clavier ; libdbus-1-3, libfontconfig1 :
+    # dépendances de QtGui ; libglib2.0-0 : boucle d'événements ; fonts-dejavu-core :
+    # une police pour que le texte ne s'affiche pas en carrés en mode offscreen.
+    - >
+      apt-get install -y -qq --no-install-recommends
+      libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0
+      fonts-dejavu-core
+    - python -m pip install --upgrade pip
+    - python -m pip install -r requirements.txt
+  generate_sbom:
+    stage: build
+    image: python:3.14
+    script:
+      - pip install cyclonedx-bom
+      - cyclonedx-py environment --outfile sbom.json
+    artifacts:
+      paths:
+        - sbom.json
+
+# Règles communes aux jobs de construction : automatiques sur une étiquette
+# de version, manuels sur main et dev (sans bloquer le pipeline).
+.build_rules:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "dev"
+      when: manual
+      allow_failure: true
+
+# -------------------------------------------------------------------
+# Étape « test »
+# -------------------------------------------------------------------
+test:linux:
+  stage: test
+  extends: .linux_qt
+  # Runners partagés Docker de l'instance : ajoutez une étiquette (ex. « docker »)
+  # si votre instance l'exige.
+  variables:
+    # Qt dessine en mémoire, sans serveur d'affichage.
+    QT_QPA_PLATFORM: "offscreen"
+  script:
+    - python -m pytest -q --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml       # résultats affichés dans la merge request
+    expire_in: 1 week
+
+# -------------------------------------------------------------------
+# Étape « build »
+# -------------------------------------------------------------------
+
+# Linux : runner Docker étiqueté « linux ».
+# Le binaire dépend de la glibc de l'image : il fonctionne sur les distributions
+# aussi récentes ou plus récentes que Debian de l'image python:*-slim.
+# Conteneur Debian avec les bibliothèques système nécessaires à Qt 6.
+.linux_qt:
+  image: bin.koda.cnrs.fr/docker-ci/python:${PYTHON_VERSION}-slim
+  cache:
+    key: "pip-linux-$CI_JOB_NAME"
+    paths:
+      - .cache/pip
+  before_script:
+    - apt-get update -qq
+    # libgl1/libegl1 : OpenGL ; libxkbcommon0 : clavier ; libdbus-1-3, libfontconfig1 :
+    # dépendances de QtGui ; libglib2.0-0 : boucle d'événements ; fonts-dejavu-core :
+    # une police pour que le texte ne s'affiche pas en carrés en mode offscreen.
+    - >
+      apt-get install -y -qq --no-install-recommends
+      libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0
+      fonts-dejavu-core
+    - python -m pip install --upgrade pip
+    - python -m pip install -r requirements.txt
+
+# SBOM (CycloneDX) : job autonome, hors du modèle .linux_qt.
+generate_sbom:
+  stage: build
+  image: python:3.14
+  script:
+    - pip install cyclonedx-bom
+    - cyclonedx-py environment --outfile sbom.json
+  artifacts:
+    paths:
+      - sbom.json
+
+
+# Windows : runner « shell » (PowerShell) installé sur un poste ou une VM Windows,
+# étiqueté « windows », avec Python ${PYTHON_VERSION} installé (py launcher).
+build:windows:
+  stage: build
+  extends: .build_rules
+  tags:
+    - windows
+  needs: ["test:linux"]
+  cache:
+    key: "pip-windows"
+    paths:
+      - .cache/pip
+  script:
+    - py "-$env:PYTHON_VERSION" -m venv .venv
+    - .\.venv\Scripts\python.exe -m pip install --upgrade pip
+    - .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+    - .\.venv\Scripts\python.exe build_exe.py
+    - Rename-Item dist\ImageAnnotationTool.exe ImageAnnotationTool-windows.exe
+    - .\.venv\Scripts\python.exe -m pip install cyclonedx-bom
+    - .\.venv\Scripts\python.exe -m cyclonedx_py environment --outfile sbom.json
+  artifacts:
+    name: "ImageAnnotationTool-windows-$CI_COMMIT_REF_SLUG"
+    paths:
+      - dist/ImageAnnotationTool-windows.exe
+      - sbom.json
+    expire_in: 1 year
+
+
+# macOS : runner « shell » installé sur un Mac, étiqueté « macos »,
+# avec python${PYTHON_VERSION} installé (python.org ou Homebrew).
+# L'architecture du binaire (arm64 ou x86_64) est celle du Mac.
+build:macos:
+  stage: build
+  extends: .build_rules
+  tags:
+    - macos
+  needs: ["test:linux"]
+  cache:
+    key: "pip-macos"
+    paths:
+      - .cache/pip
+  script:
+    - python${PYTHON_VERSION} -m venv .venv
+    - source .venv/bin/activate
+    - python -m pip install --upgrade pip
+    - python -m pip install -r requirements.txt
+    - python build_exe.py
+    # Signature / notarisation facultatives : voir docs/generation-executable.md.
+    - ditto -c -k --keepParent dist/ImageAnnotationTool "dist/ImageAnnotationTool-macos-$(uname -m).zip"
+  artifacts:
+    name: "ImageAnnotationTool-macos-$CI_COMMIT_REF_SLUG"
+    paths:
+      - dist/ImageAnnotationTool-macos-*.zip
+    expire_in: 1 year
+
+
+# -------------------------------------------------------------------
+# Étape « release »
+# -------------------------------------------------------------------
+# Crée la Release GitLab associée à l'étiquette, avec un lien vers l'archive
+# des artefacts de chaque job de construction.
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+  needs:
+    - job: build:linux
+      artifacts: false
+    - job: build:windows
+      artifacts: false
+    - job: build:macos
+      artifacts: false
+  script:
+    - echo "Création de la release $CI_COMMIT_TAG"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Image Annotation Tool $CI_COMMIT_TAG"
+    description: "Version $CI_COMMIT_TAG d'Image Annotation Tool. Exécutables Windows, macOS et Linux ci-dessous."
+    assets:
+      links:
+        - name: "Windows (.exe)"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/download?job=build:windows"
+          link_type: package
+        - name: "macOS (.zip)"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/download?job=build:macos"
+          link_type: package
+        - name: "Linux (binaire)"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/download?job=build:linux"
+          link_type: package

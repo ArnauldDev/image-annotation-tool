@@ -61,6 +61,7 @@ L'éditeur travaille sur un **aperçu réduit** (plus grand côté limité à 16
 | `crop`          | liste de 4 nombres ou `null` | `null`                        | Zone conservée `[x1, y1, x2, y2]` après rotation                                         |
 | `export`        | objet                        | `{width: null, height: null}` | Taille d'export ; si `width` est fourni, la hauteur est déduite (proportions conservées) |
 | `stroke_width`  | entier                       | `3`                           | Épaisseur de trait par défaut                                                            |
+| `circle_counter`| entier                       | `1`                           | Prochain numéro posé par le mode « Numérotation » de l'outil Cercle (voir §4)            |
 | `annotations`   | liste d'objets               | `[]`                          | Annotations vectorielles (voir §4)                                                       |
 | `loupes`        | liste d'objets               | `[]`                          | Loupes d'agrandissement (voir §5)                                                        |
 | `custom_colors` | liste de chaînes `#RRGGBB`   | `[]`                          | Couleurs personnalisées, pour retrouver la même palette sur un autre poste               |
@@ -88,6 +89,7 @@ Chaque élément de `annotations` possède un `type` : `label`, `rect`, `circle`
 | `bold_text`          | booléen | `false`   | `label`         | Texte en gras                                             |
 | `line_arrow_start`   | booléen | `false`   | `line`          | Pointe de flèche au début                                 |
 | `line_arrow_end`     | booléen | `false`   | `line`          | Pointe de flèche à la fin                                 |
+| `numbered`           | booléen | `false`   | `circle`        | Cercle numéroté : `text` contient le numéro, tracé en blanc sur le fond des étiquettes |
 
 ## 5. Loupes
 
@@ -106,6 +108,7 @@ Une recette peut contenir **plusieurs loupes** dans la liste `loupes`. Chaque lo
 | `stroke_width`                   | entier  | `4`       | Épaisseur du contour circulaire                                  |
 | `arrow_stroke_width`             | entier  | `2`       | Épaisseur de la flèche, indépendante du contour                  |
 | `rotation`                       | nombre  | `0.0`     | Rotation (degrés, sens horaire) du **contenu agrandi** seulement |
+| `brightness`                     | nombre  | `0.0`     | Luminosité locale du contenu agrandi (-100 à 100, facteur `1 + valeur/100`), indépendante de la luminosité globale |
 
 Au chargement, un `id` manquant ou dupliqué est renuméroté pour garantir l'unicité.
 
@@ -157,7 +160,7 @@ La propriété Python `ProcessingRecipe.loupe` (première loupe) est conservée 
 ## 9. Exemple complet
 
 <details>
-<summary>Exemple de fichier <code>*-iat.json</code> avec deux loupes (cliquez pour déplier)</summary>
+<summary>Exemple de fichier <code>*-iat.json</code> avec un cercle numéroté et deux loupes (cliquez pour déplier)</summary>
 
 ```json
 {
@@ -172,6 +175,7 @@ La propriété Python `ProcessingRecipe.loupe` (première loupe) est conservée 
     "height": 1200
   },
   "stroke_width": 3,
+  "circle_counter": 2,
   "annotations": [
     {
       "type": "rect",
@@ -202,6 +206,19 @@ La propriété Python `ProcessingRecipe.loupe` (première loupe) est conservée 
       "show_text": true,
       "fill_enabled": true,
       "bold_text": false
+    },
+    {
+      "type": "circle",
+      "x1": 700.0,
+      "y1": 300.0,
+      "x2": 780.0,
+      "y2": 380.0,
+      "text": "1",
+      "color": "#FFFF00",
+      "stroke_width": 3,
+      "font_size": 28,
+      "border_radius": 0,
+      "numbered": true
     }
   ],
   "loupes": [

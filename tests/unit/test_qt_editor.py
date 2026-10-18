@@ -516,7 +516,9 @@ def test_editor_load_image_auto_naming_and_json_lifecycle(qapp, tmp_path):
 
     assert window.source_path == raw_path
     assert window.current_json_path == tmp_path / "electronique-iat.json"
-    assert window.default_export_path == tmp_path / "electronique-iat-x1200.jpg"
+    # TASK-018 : la largeur par défaut (1200) est reclampée à la largeur de
+    # la source (200 px), le nom d'export proposé suit la valeur réelle.
+    assert window.default_export_path == tmp_path / "electronique-iat-x200.jpg"
     assert not window.current_json_path.exists()
     assert window.objects_list.count() == 0
 

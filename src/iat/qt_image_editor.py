@@ -3,7 +3,7 @@
 # Description: A Qt-based image annotation tool.
 # Developer: ArnauldDev
 # Created Date: 2026-09-08
-# Last Modified: 2026-09-26
+# Last Modified: 2026-10-19
 
 
 from __future__ import annotations
@@ -82,6 +82,7 @@ from PyQt6.QtSvg import QSvgRenderer
 
 from iat.config import AppConfig, config, load_dotenv, update_config_in_place
 from iat.image_processor import (
+    LABEL_BACKGROUND_RGB,
     Annotation,
     LoupeSpec,
     ProcessingRecipe,
@@ -134,6 +135,10 @@ ANNOTATION_FAMILY_TOOLS: frozenset[str] = frozenset({TOOL_TEXT, TOOL_RECT, TOOL_
 #: centre/arrow tip, rectangle corner, ...) when picking items to drag.
 HANDLE_HIT_RADIUS = 12.0
 
+#: Diamètre (pixels de l'aperçu) du cercle posé par un simple clic en mode
+#: « Numérotation » de l'outil Cercle ; redimensionnable ensuite via les poignées.
+DEFAULT_NUMBERED_CIRCLE_DIAMETER = 48.0
+
 #: Curated colour swatches offered in the tools palette.
 COLOR_PALETTE = [
     "#FFFF00",
@@ -178,7 +183,8 @@ TOOL_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     ),
     TOOL_CIRCLE: (
         "Zone ronde",
-        "Glissez pour dessiner un cadre ovale/circulaire en surbrillance autour d'une zone d'intérêt.",
+        "Glissez pour dessiner un cadre ovale/circulaire en surbrillance autour d'une zone d'intérêt. "
+        "Activez « Numérotation » pour placer, par simple clic, un cercle parfait portant le numéro suivant.",
     ),
     TOOL_LINE: (
         "Ligne",
@@ -502,6 +508,9 @@ class AnnotationItem:
     #: "line" only: draw an arrowhead at the start/end point.
     line_arrow_start: bool = False
     line_arrow_end: bool = False
+    #: "circle" only: draw ``text`` as an auto-number inside the circle
+    #: (numbering mode), on the label background with white text.
+    numbered: bool = False
     #: Unique identifier, assigned when the annotation is committed to the
     #: canvas (see ``ImageCanvas._commit_new_annotation``). ``0`` marks a
     #: draft that hasn't been added to ``ImageCanvas.annotations`` yet.
@@ -533,6 +542,9 @@ class LoupeOverlay:
     stroke_width: int = 4
     #: Thickness of the arrow pointing to the magnified target, independent of stroke_width.
     arrow_stroke_width: int = 2
+    #: Luminosité locale du contenu agrandi (-100 à 100), indépendante de la
+    #: luminosité globale de l'image ; 0 signifie aucun réglage.
+    brightness: float = 0.0
     #: Unique identifier, auto-incremented when a loupe is added.
     id: int = 1
 
@@ -562,8 +574,8 @@ class ImageCanvas(QWidget):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-26
-        @version 11
+        @modified 2026-10-18
+        @version 13
 
         @param parent
 
@@ -575,6 +587,13 @@ class ImageCanvas(QWidget):
         self.annotations: list[AnnotationItem] = []
         #: Loupe overlays, each referenced as "loupe:<id>" in ``layer_order``.
         self.loupes: list[LoupeOverlay] = []
+        #: Cache du contenu agrandi rehaussé en luminosité, indexé par loupe :
+        #: couple (signature de rendu, pixmap) pour ne recalculer que lorsqu'un
+        #: réglage ou la zone source change (voir ``_loupe_content_pixmap``).
+        self._loupe_content_cache: dict[int, tuple[tuple, QPixmap]] = {}
+        #: Incrémenté à chaque reconstruction de ``base_pixmap`` : invalide le
+        #: cache ci-dessus quand l'aperçu (luminosité globale, etc.) change.
+        self._pixmap_generation: int = 0
         self.layer_order: list[str] = []
         self.tool = TOOL_VIEW
         self.reference_points: list[QPointF] = []
@@ -612,12 +631,22 @@ class ImageCanvas(QWidget):
         #: Defaults applied to the next "line" annotation created.
         self.current_line_arrow_start: bool = False
         self.current_line_arrow_end: bool = False
+        #: Mode « Numérotation » de l'outil Cercle : un simple clic dépose un
+        #: cercle parfait portant ``circle_counter`` (prochain numéro posé,
+        #: sérialisé dans la recette JSON — voir ``ProcessingRecipe``).
+        self.numbering_enabled: bool = False
+        self.circle_counter: int = 1
         #: Primary selection (object driving the options panel, or "crop"), and
         #: every selected visual object when several are selected at once.
         self._selected_item: AnnotationItem | LoupeOverlay | str | None = None
         self._selection: list[AnnotationItem | LoupeOverlay] = []
         #: Geometry, at press time, of the other objects moved with a group drag.
         self._group_origins: list[tuple[AnnotationItem | LoupeOverlay, tuple | None]] = []
+        # Marquee (rubber-band) selection state (TOOL_VIEW only).
+        self._marquee_dragging: bool = False
+        self._marquee_start: QPointF | None = None
+        self._marquee_end: QPointF | None = None
+        self._marquee_rect: QRectF | None = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -1023,8 +1052,8 @@ class ImageCanvas(QWidget):
 
         @author ArnauldDev
         @created 2026-09-23
-        @modified 2026-09-23
-        @version 1
+        @modified 2026-10-18
+        @version 2
 
         @param center
         @param target
@@ -1044,6 +1073,7 @@ class ImageCanvas(QWidget):
             loupe.zoom = template.zoom
             loupe.stroke_width = template.stroke_width
             loupe.arrow_stroke_width = template.arrow_stroke_width
+            loupe.brightness = template.brightness
         self.loupes.append(loupe)
         # Une nouvelle loupe est placée au premier plan.
         if self.layer_order or self.annotations:
@@ -1071,6 +1101,40 @@ class ImageCanvas(QWidget):
         if has_existing_objects:
             self.layer_order.insert(0, item.layer_token)
 
+    def add_numbered_circle(self, center: QPointF) -> AnnotationItem:
+        """
+        Description: Place, in numbering mode, a perfect circle centred on ``center``, carrying the current counter value, then increment the counter. The radius comes from the panel "Rayon" spin (``current_border_radius``); 0 falls back to ``DEFAULT_NUMBERED_CIRCLE_DIAMETER`` / 2.
+
+        @author ArnauldDev
+        @created 2026-10-18
+        @modified 2026-10-18
+        @version 2
+
+        @param center
+
+        @returns l'annotation de cercle numéroté ajoutée
+        """
+        # Taille pilotée par le spin « Rayon » du volet de droite (0 = défaut).
+        radius = self.current_border_radius if self.current_border_radius > 0 else DEFAULT_NUMBERED_CIRCLE_DIAMETER / 2.0
+        item = AnnotationItem(
+            kind="circle",
+            start=QPointF(center.x() - radius, center.y() - radius),
+            end=QPointF(center.x() + radius, center.y() + radius),
+            text=str(self.circle_counter),
+            color=QColor(self.current_color),
+            stroke_width=self.current_stroke_width,
+            numbered=True,
+        )
+        self._commit_new_annotation(item)
+        self.selected_item = item
+        # Incrémenté avant l'émission du signal : la sauvegarde automatique
+        # enregistre le prochain numéro dans la recette JSON.
+        self.circle_counter += 1
+        self.update()
+        self.annotation_changed.emit()
+        self.item_selected.emit(item)
+        return item
+
     def set_preview_image(self, image: Image.Image | None) -> None:
         """
         Description:
@@ -1094,11 +1158,15 @@ class ImageCanvas(QWidget):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 1
+        @modified 2026-10-18
+        @version 2
 
         @returns
         """
+        # Toute reconstruction du pixmap de base invalide le cache des contenus
+        # de loupe rehaussés en luminosité (luminosité globale, nouvelle image…).
+        self._pixmap_generation += 1
+        self._loupe_content_cache.clear()
         if self.preview_image is None:
             self.base_pixmap = None
             return
@@ -1164,6 +1232,9 @@ class ImageCanvas(QWidget):
                 self.paint_annotations(painter, bounds, [self.draft_annotation])
             if self.show_rotation_grid and self.tool == TOOL_ROTATE_LINE:
                 self.paint_rotation_grid(painter, bounds)
+            # Dessiner la zone de sélection marquee (en mode TOOL_VIEW)
+            if self._marquee_dragging and self._marquee_rect is not None and self.tool == TOOL_VIEW:
+                self.paint_marquee(painter, bounds)
             self.paint_crop_overlay(painter, bounds)
         else:
             painter.fillRect(self.rect(), QColor("#1b1b1b"))
@@ -1302,6 +1373,39 @@ class ImageCanvas(QWidget):
         painter.drawLine(QPointF(cx, bounds.top()), QPointF(cx, bounds.bottom()))
         painter.drawLine(QPointF(bounds.left(), cy), QPointF(bounds.right(), cy))
 
+    def paint_marquee(self, painter: QPainter, bounds: QRectF) -> None:
+        """
+        Description: Draw the rubber-band selection rectangle (marquee), in screen coordinates, while dragging from empty space in "Déplacer" mode.
+
+        @author ArnauldDev
+        @created 2026-10-18
+        @modified 2026-10-18
+        @version 1
+
+        @param painter
+        @param bounds Rectangle (screen space) covered by the preview image.
+
+        @returns
+        """
+        if self.preview_image is None or self._marquee_rect is None:
+            return
+        scale_x = bounds.width() / self.preview_image.width
+        scale_y = bounds.height() / self.preview_image.height
+        rect = QRectF(
+            bounds.left() + self._marquee_rect.left() * scale_x,
+            bounds.top() + self._marquee_rect.top() * scale_y,
+            self._marquee_rect.width() * scale_x,
+            self._marquee_rect.height() * scale_y,
+        )
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fill = QColor(0, 120, 215, 40)
+        border = QColor(0, 120, 215, 180)
+        painter.setBrush(fill)
+        painter.setPen(QPen(border, 1))
+        painter.drawRect(rect)
+        painter.restore()
+
     def paint_annotations(
         self, painter: QPainter, bounds: QRectF, items: list[AnnotationItem] | None = None
     ) -> None:
@@ -1310,8 +1414,8 @@ class ImageCanvas(QWidget):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 3
+        @modified 2026-10-18
+        @version 4
 
         @param painter
         @param bounds
@@ -1390,9 +1494,21 @@ class ImageCanvas(QWidget):
                     (item.end.x() - item.start.x()) * scale_x,
                     (item.end.y() - item.start.y()) * scale_y,
                 )
+                # Cercle numéroté : fond des étiquettes (avec alpha) + numéro
+                # blanc centré, police dimensionnée depuis le diamètre affiché
+                # pour garder la même proportion qu'à l'export.
                 painter.setPen(QPen(item.color, stroke))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setBrush(
+                    QColor(*LABEL_BACKGROUND_RGB, 230) if item.numbered else Qt.BrushStyle.NoBrush
+                )
                 painter.drawEllipse(rect.normalized())
+                if item.numbered and item.text:
+                    diameter = min(abs(rect.width()), abs(rect.height()))
+                    font = QFont(painter.font())
+                    font.setPixelSize(max(10, int(diameter * 0.5)))
+                    painter.setFont(font)
+                    painter.setPen(QPen(QColor("white"), 1))
+                    painter.drawText(rect.normalized(), Qt.AlignmentFlag.AlignCenter, item.text)
             elif item.kind == "line":
                 if item.start is None or item.end is None:
                     continue
@@ -1437,8 +1553,8 @@ class ImageCanvas(QWidget):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-23
-        @version 4
+        @modified 2026-10-18
+        @version 5
 
         @param painter
         @param bounds
@@ -1465,7 +1581,13 @@ class ImageCanvas(QWidget):
         painter.translate(center)
         if loupe.rotation:
             painter.rotate(loupe.rotation)
-        painter.drawPixmap(QRectF(-radius, -radius, radius * 2, radius * 2), self.base_pixmap, source)
+        if loupe.brightness:
+            # Luminosité locale : contenu agrandi réhaussé exactement comme à
+            # l'export (voir _loupe_content_pixmap), sinon rendu direct classique.
+            content = self._loupe_content_pixmap(loupe, source, radius * 2)
+            painter.drawPixmap(QRectF(-radius, -radius, radius * 2, radius * 2), content, QRectF(content.rect()))
+        else:
+            painter.drawPixmap(QRectF(-radius, -radius, radius * 2, radius * 2), self.base_pixmap, source)
         painter.restore()
         painter.setPen(QPen(loupe.color, max(1, loupe.stroke_width)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1484,6 +1606,67 @@ class ImageCanvas(QWidget):
         painter.setPen(arrow_pen)
         painter.drawLine(start, end)
         self._paint_arrow_head(painter, start, end, loupe.color, max(1, loupe.arrow_stroke_width))
+
+    def _loupe_content_pixmap(self, loupe: LoupeOverlay, source: QRectF, size: int) -> QPixmap:
+        """
+        Description: Magnified disc content of ``loupe`` with its local brightness applied, cached between repaints.
+
+        Le rééclaircissement reprend la formule exacte du moteur Pillow
+        (apply_brightness_contrast, facteur 1 + luminosité/100) appliquée aux
+        canaux RGB seuls : l'aperçu reste identique à l'export et les zones
+        transparentes (source débordant de l'image) sont conservées telles quelles.
+
+        @author ArnauldDev
+        @created 2026-10-18
+        @modified 2026-10-18
+        @version 1
+
+        @param loupe
+        @param source Zone source agrandie, en coordonnées de l'image/aperçu
+        @param size Côté final du disque en pixels écran
+
+        @returns
+        """
+        key = (
+            round(loupe.brightness, 3),
+            round(source.x(), 2),
+            round(source.y(), 2),
+            round(source.width(), 2),
+            round(source.height(), 2),
+            size,
+            self._pixmap_generation,
+        )
+        cached = self._loupe_content_cache.get(loupe.id)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        # Rendu de la zone source à sa taille finale (même appel que
+        # drawPixmap) dans une image transparente : les parties de la source
+        # hors image restent transparentes, comme dans le rendu direct.
+        rendered = QImage(size, size, QImage.Format.Format_ARGB32)
+        rendered.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rendered)
+        painter.drawPixmap(QRectF(rendered.rect()), self.base_pixmap, source)
+        painter.end()
+
+        rgba = rendered.convertToFormat(QImage.Format.Format_RGBA8888)
+        buffer = rgba.constBits()
+        buffer.setsize(rgba.sizeInBytes())
+        raw = bytes(buffer)
+        stride = rgba.bytesPerLine()
+        if stride != size * 4:
+            raw = b"".join(raw[row * stride : row * stride + size * 4] for row in range(size))
+        content = Image.frombytes("RGBA", (size, size), raw)
+        alpha = content.getchannel("A")
+        bright = apply_brightness_contrast(content.convert("RGB"), brightness=loupe.brightness, contrast=1.0)
+        content = bright.convert("RGBA")
+        content.putalpha(alpha)
+        # .copy() : détacher le QPixmap de l'octet Python transitoire.
+        pixmap = QPixmap.fromImage(
+            QImage(content.tobytes(), size, size, size * 4, QImage.Format.Format_RGBA8888).copy()
+        )
+        self._loupe_content_cache[loupe.id] = (key, pixmap)
+        return pixmap
 
     def paint_crop_overlay(self, painter: QPainter, bounds: QRectF) -> None:
         """
@@ -1799,16 +1982,17 @@ class ImageCanvas(QWidget):
             return ("crop_move", None)
         return None
 
-    def _apply_drag(self, delta: QPointF) -> None:
+    def _apply_drag(self, delta: QPointF, shift: bool = False) -> None:
         """
-        Description:
+        Description: Apply ``delta`` to the dragged handle/body. ``shift`` keeps a rectangle/circle proportional while one of its corner handles is resized (Shift held); numbered circles stay proportional regardless.
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 3
+        @modified 2026-10-18
+        @version 5
 
         @param delta
+        @param shift
 
         @returns
         """
@@ -1839,8 +2023,18 @@ class ImageCanvas(QWidget):
             item.start = item.start + delta
         elif mode == "shape_start" and item is not None and item.start is not None:
             item.start = item.start + delta
+            if isinstance(item, AnnotationItem) and item.end is not None:
+                # Cercle numéroté : la proportion reste constante (cercle parfait).
+                # Rectangle/cercle classique : contraint avec Shift maintenu.
+                if item.numbered or (shift and item.kind in ("rect", "circle")):
+                    item.start = self._constrain_to_square(item.end, item.start)
         elif mode == "shape_end" and item is not None and item.end is not None:
             item.end = item.end + delta
+            if isinstance(item, AnnotationItem) and item.start is not None:
+                # Cercle numéroté : la proportion reste constante (cercle parfait).
+                # Rectangle/cercle classique : contraint avec Shift maintenu.
+                if item.numbered or (shift and item.kind in ("rect", "circle")):
+                    item.end = self._constrain_to_square(item.start, item.end)
         elif mode == "shape_body" and item is not None and item.start is not None and item.end is not None:
             item.start = item.start + delta
             item.end = item.end + delta
@@ -1987,31 +2181,32 @@ class ImageCanvas(QWidget):
             return origin[2]
         return origin[1]
 
-    def _drag_to(self, current: QPointF, snap: bool) -> None:
+    def _drag_to(self, current: QPointF, snap: bool, shift: bool = False) -> None:
         """
-        Description: Move the dragged item so it follows the mouse from the press point; with ``snap`` the reference point is aligned on the grid.
+        Description: Move the dragged item so it follows the mouse from the press point; with ``snap`` the reference point is aligned on the grid. With ``shift`` held, rectangle/circle handles resize proportionally (Shift).
 
         @author ArnauldDev
         @created 2026-09-23
-        @modified 2026-09-23
-        @version 2
+        @modified 2026-10-18
+        @version 3
 
         @param current
         @param snap
+        @param shift
 
         @returns
         """
         delta = current - self._drag_press_point
         if self._drag_origin is None:
             # Pas d'état d'origine (appel direct) : déplacement incrémental.
-            self._apply_drag(current - self.last_mouse)
+            self._apply_drag(current - self.last_mouse, shift)
             self.last_mouse = current
             return
         reference = self._drag_reference_point()
         if snap and reference is not None:
             delta = self.snap_to_grid(reference + delta) - reference
         self._restore_drag_origin()
-        self._apply_drag(delta)
+        self._apply_drag(delta, shift)
         # Sélection multiple : les autres objets suivent le même déplacement.
         for other, origin in self._group_origins:
             self._restore_item_origin(other, origin)
@@ -2068,12 +2263,12 @@ class ImageCanvas(QWidget):
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         """
-        Description: Start dragging an existing item (the "Déplacer" behaviour, always active) or start drawing with the active tool. Holding Ctrl snaps the pressed point to the grid.
+        Description: Start dragging an existing item (the "Déplacer" behaviour, always active) or start drawing with the active tool. Holding Ctrl snaps the pressed point to the grid. Holding Shift with the rectangle/circle tool keeps the gesture perfectly proportioned — a new shape drawn (even over an existing one) is a square/circle and a shape handle resizes proportionally — instead of extending the selection. In circle numbering mode, a plain click immediately places the next numbered circle. In "Déplacer" mode, pressing on empty space starts the marquee (rubber-band) selection.
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-23
-        @version 4
+        @modified 2026-10-18
+        @version 6
 
         @param event
 
@@ -2085,19 +2280,37 @@ class ImageCanvas(QWidget):
         raw_point = self.to_image_coordinates(event.position().toPoint())
         img_point = self.snap_to_grid(raw_point) if self._snap_requested(event) else raw_point
 
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         # "Déplacer" est toujours actif : cliquer sur le contour d'un objet
         # existant le fait glisser, quel que soit l'outil courant.
         hit = self._hit_test(event.position())
-        if hit is not None and isinstance(hit[1], (AnnotationItem, LoupeOverlay)) and (
-            event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-        ):
+        # Rectangle / cercle + Shift maintenu : Shift est associé à la contrainte
+        # de proportion (carré / cercle parfait). Le tracé démarre donc aussi par-
+        # dessus le corps d'une forme existante (au lieu de la bascule de
+        # sélection Shift+clic, réservée aux autres outils), tandis qu'une
+        # poignée de rectangle/cercle reste un redimensionnement — lui aussi
+        # contraint par Shift (TASK-013).
+        body_hit = hit is not None and hit[0].endswith("_body")
+        shape_handle_hit = hit is not None and hit[0] in ("shape_start", "shape_end")
+        draw_constrained = shift and self.tool in (TOOL_RECT, TOOL_CIRCLE)
+        skip_toggle = draw_constrained and (body_hit or shape_handle_hit)
+        skip_drag = draw_constrained and body_hit
+        if hit is not None and isinstance(hit[1], (AnnotationItem, LoupeOverlay)) and shift and not skip_toggle:
             # Maj + clic : ajoute l'objet à la sélection ou l'en retire.
             self.toggle_in_selection(hit[1])
             self.item_selected.emit(self.selected_item)
             self.update()
             return
-        if hit is not None:
+        if hit is not None and not skip_drag:
             self._begin_item_drag(hit, raw_point)
+            return
+
+        if self.tool == TOOL_CIRCLE and self.numbering_enabled:
+            # Mode numérotation : un simple clic dépose immédiatement un
+            # cercle parfait (diamètre fixe) centré sur le clic, portant le
+            # numéro courant ; le compteur est incrémenté avant la
+            # sauvegarde de la recette pour enregistrer le prochain numéro.
+            self.add_numbered_circle(img_point)
             return
 
         if self.tool in (TOOL_ROTATE_LINE, TOOL_CROP):
@@ -2152,19 +2365,24 @@ class ImageCanvas(QWidget):
             self.item_selected.emit(self.selected_item)
             self.annotation_changed.emit()
         elif self.tool == TOOL_VIEW:
-            if self.selected_item is not None:
-                self.selected_item = None
-                self.item_selected.emit(None)
-                self.update()
+            if hit is not None and isinstance(hit[1], (AnnotationItem, LoupeOverlay)):
+                # Clic sur objet en mode Déplacer : déjà géré ci-dessus
+                pass
+            else:
+                # Clic dans le vide : démarre sélection par zone (marquee)
+                self._marquee_dragging = True
+                self._marquee_start = QPointF(img_point)
+                self._marquee_end = QPointF(img_point)
+                self._marquee_rect = None
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
         """
-        Description: Update the item being moved or the shape being drawn. Holding Ctrl snaps to the grid; without it the pointer is followed freely.
+        Description: Update the item being moved or the shape being drawn. Holding Ctrl snaps to the grid; without it the pointer is followed freely. Holding Shift keeps a rectangle/circle perfectly proportioned, including while resizing an existing one. In "Déplacer" mode, dragging from empty space stretches the marquee selection rectangle.
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-23
-        @version 3
+        @modified 2026-10-18
+        @version 5
 
         @param event
 
@@ -2175,11 +2393,12 @@ class ImageCanvas(QWidget):
 
         raw_current = self.to_image_coordinates(event.position().toPoint())
         snap = self._snap_requested(event)
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         current = self.snap_to_grid(raw_current) if snap else raw_current
         if self.dragging and self.drag_mode is not None:
             # Un objet existant est en cours de déplacement : cela prime sur
             # le comportement habituel de l'outil actif.
-            self._drag_to(raw_current, snap)
+            self._drag_to(raw_current, snap, shift)
             self.update()
         elif self.tool == TOOL_RECT and self.dragging:
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -2229,15 +2448,19 @@ class ImageCanvas(QWidget):
             if self.crop_drag_mode == "crop_new":
                 self.crop_rect = QRectF(self.drag_start, current)
             self.update()
+        elif self._marquee_dragging and self.tool == TOOL_VIEW and self._marquee_start is not None:
+            self._marquee_end = QPointF(current)
+            self._marquee_rect = QRectF(self._marquee_start, self._marquee_end).normalized()
+            self.update()
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
         """
-        Description: Commit the shape being drawn or the item being moved.
+        Description: Commit the shape being drawn or the item being moved. A rectangle/circle still held to Shift is re-constrained to a perfect proportion right before the commit. Releasing a marquee gesture in "Déplacer" mode selects the intersecting objects (Shift adds to the selection, Ctrl toggles each of them); a click without dragging deselects everything.
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-23
-        @version 4
+        @modified 2026-10-18
+        @version 5
 
         @param event
 
@@ -2255,6 +2478,15 @@ class ImageCanvas(QWidget):
                     self.selected_item = self.draft_annotation
                     has_changed = True
             elif self.draft_annotation.kind in ("rect", "circle", "line") and self.draft_annotation.start != self.draft_annotation.end:
+                if self.draft_annotation.kind in ("rect", "circle") and (
+                    event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                ):
+                    # Shift maintenu au relâchement : la proportion est garantie
+                    # même si le dernier mouvement de souris a eu lieu sans Shift
+                    # (la contrainte n'est sinon évaluée qu'au mouseMove) (TASK-013).
+                    self.draft_annotation.end = self._constrain_to_square(
+                        self.draft_annotation.start, self.draft_annotation.end
+                    )
                 self._commit_new_annotation(self.draft_annotation)
                 self.selected_item = self.draft_annotation
                 has_changed = True
@@ -2264,6 +2496,54 @@ class ImageCanvas(QWidget):
             self.drag_mode is not None or self.crop_drag_mode is not None or isinstance(self.drag_target, LoupeOverlay)
         ):
             has_changed = True
+
+        # Sélection par zone (marquee) en mode TOOL_VIEW : la sélection n'est
+        # qu'une opération de sélection — elle n'altère pas le contenu, donc
+        # seul ``item_selected`` est émis (synchro avec le menu de gauche),
+        # sans passer par ``annotation_changed`` (historique / sauvegarde).
+        if self._marquee_dragging:
+            shift_mod = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            ctrl_mod = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            start, end, rect_img = self._marquee_start, self._marquee_end, self._marquee_rect
+            # Un déplacement imperceptible au relâchement reste un clic.
+            is_click = (
+                start is None
+                or end is None
+                or (rect_img is None)
+                or (rect_img.width() < 1.0 and rect_img.height() < 1.0)
+            )
+            if is_click:
+                # Clic dans le vide : désélectionner (comportement historique).
+                self.selected_item = None
+                self.item_selected.emit(None)
+                self.update()
+            else:
+                intersected: list[AnnotationItem | LoupeOverlay] = [
+                    item
+                    for item in [*self.annotations, *self.loupes]
+                    if (bounds := self.item_bounds(item)) is not None and rect_img.intersects(bounds)
+                ]
+                current = self.selected_objects()
+                if ctrl_mod:
+                    # Ctrl : bascule chaque objet intersecté.
+                    result = [item for item in current if not any(item is hit_item for hit_item in intersected)]
+                    result.extend(item for item in intersected if not any(item is kept for kept in current))
+                elif shift_mod:
+                    # Maj : ajoute les objets intersectés à la sélection.
+                    result = list(current)
+                    result.extend(item for item in intersected if not any(item is kept for kept in current))
+                else:
+                    # Sans modificateur : remplace la sélection.
+                    result = intersected
+                self.set_selection(result, result[-1] if result else None)
+                self.update()
+                self.item_selected.emit(self._selected_item)
+            # Réinitialiser l'état du marquee.
+            self._marquee_dragging = False
+            self._marquee_start = None
+            self._marquee_end = None
+            self._marquee_rect = None
+            return
 
         self.dragging = False
         self.drag_mode = None
@@ -2603,6 +2883,11 @@ class ImageEditorWindow(QMainWindow):
         self.load_recipe_action = QAction("Importer les annotations depuis un fichier JSON", self)
         self.load_recipe_action.triggered.connect(self.load_recipe)
 
+        self.open_folder_action = QAction("Ouvrir le dossier de l'image", self)
+        self.open_folder_action.setToolTip("Ouvrir le dossier contenant l'image actuellement ouverte")
+        self.open_folder_action.setShortcut(QKeySequence("Shift+O"))
+        self.open_folder_action.triggered.connect(self.open_image_folder)
+
         self.tools_help_action = QAction("Aide sur les outils", self)
         self.tools_help_action.triggered.connect(self.show_tools_help)
 
@@ -2649,6 +2934,8 @@ class ImageEditorWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.save_recipe_action)
         file_menu.addAction(self.load_recipe_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self.open_folder_action)
         file_menu.addSeparator()
 
         # ③ Sous-menu fichiers récents
@@ -2738,6 +3025,7 @@ class ImageEditorWindow(QMainWindow):
             self.export_action,
             self.save_recipe_action,
             self.load_recipe_action,
+            self.open_folder_action,
             self.copy_action,
             self.paste_action,
             self.delete_action,
@@ -3938,20 +4226,30 @@ class ImageEditorWindow(QMainWindow):
 
     def _on_border_radius_changed(self, value: int) -> None:
         """
-        Description: ⑨ Mise à jour du rayon de coin de l'item sélectionné et du prochain tracé.
+        Description: ⑨ Mise à jour du rayon de coin de l'item sélectionné et du prochain tracé. Pour un cercle numéroté, le spin « Rayon » pilote sa taille (redimensionnement autour du centre).
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 1
+        @modified 2026-10-18
+        @version 2
 
         @param value
 
         @returns
         """
         self.canvas.current_border_radius = value
-        if isinstance(self.canvas.selected_item, AnnotationItem) and self.canvas.selected_item.kind in ("rect", "label"):
-            self.canvas.selected_item.border_radius = value
+        item = self.canvas.selected_item
+        if isinstance(item, AnnotationItem) and item.kind in ("rect", "label"):
+            item.border_radius = value
+            self.canvas.update()
+            self.refresh_objects_list()
+            self.auto_save_recipe()
+        elif isinstance(item, AnnotationItem) and item.numbered:
+            # Cercle numéroté : la géométrie porte la taille ; 0 = diamètre par défaut.
+            radius = value if value > 0 else DEFAULT_NUMBERED_CIRCLE_DIAMETER / 2.0
+            center = QPointF((item.start.x() + item.end.x()) / 2.0, (item.start.y() + item.end.y()) / 2.0)
+            item.start = QPointF(center.x() - radius, center.y() - radius)
+            item.end = QPointF(center.x() + radius, center.y() + radius)
             self.canvas.update()
             self.refresh_objects_list()
             self.auto_save_recipe()
@@ -4081,13 +4379,39 @@ class ImageEditorWindow(QMainWindow):
         """Switch which shape the "Annotation" tool currently draws (étiquette/rectangle/cercle/ligne)."""
         self.select_tool(tool)
 
+    def _on_numbering_toggled(self, checked: bool) -> None:
+        """Enable/disable the circle numbering mode (click to place the next numbered circle) and re-sync the panel controls it drives."""
+        self.canvas.numbering_enabled = checked
+        # Le spin « Rayon » ne s'active pour l'outil Cercle qu'en mode numérotation.
+        if self.canvas.tool == TOOL_CIRCLE:
+            self._update_annotation_options_for_kind("circle")
+
+    def _reset_numbering_counter(self) -> None:
+        """Reset the numbering counter back to 1 and persist it in the recipe."""
+        self.canvas.circle_counter = 1
+        self._sync_numbering_controls()
+        self.auto_save_recipe(force=True)
+
+    def _sync_numbering_controls(self) -> None:
+        """Reflect the canvas numbering state (toggle + counter value) in the panel."""
+        if not hasattr(self, "numbering_toggle_button"):
+            return
+        # blockSignals : seul l'utilisateur doit basculer le mode, pas le code.
+        self.numbering_toggle_button.blockSignals(True)
+        self.numbering_toggle_button.setChecked(self.canvas.numbering_enabled)
+        self.numbering_toggle_button.blockSignals(False)
+        self.counter_label.setText(f"{tr('Compteur')} : {self.canvas.circle_counter}")
+
     def _update_annotation_options_for_kind(self, kind: str) -> None:
         """Disable controls that do not apply to the selected annotation type."""
         if not hasattr(self, "label_shape_combo"):
             return
         is_label = kind == "label"
         is_line = kind == "line"
-        supports_radius = kind in {"rect", "label"}
+        is_circle = kind == "circle"
+        # Pour le Cercle, « Rayon » pilote la taille des cercles numérotés :
+        # il ne s'active donc qu'en mode numérotation, comme la bascule.
+        supports_radius = kind in {"rect", "label"} or (is_circle and self.canvas.numbering_enabled)
         for widget in (
             self.label_shape_combo,
             self.fill_enabled_checkbox,
@@ -4098,8 +4422,18 @@ class ImageEditorWindow(QMainWindow):
         ):
             widget.setEnabled(is_label)
         self.border_radius_spin.setEnabled(supports_radius)
+        self.border_radius_spin.setToolTip(
+            "Rayon des cercles numérotés (0 = 24 px par défaut)"
+            if is_circle and self.canvas.numbering_enabled
+            else "Arrondi des coins (0 = angles droits)"
+        )
         self.line_arrow_start_checkbox.setEnabled(is_line)
         self.line_arrow_end_checkbox.setEnabled(is_line)
+        # La numérotation n'existe que pour l'outil Cercle.
+        self.numbering_toggle_button.setEnabled(is_circle)
+        self.counter_label.setEnabled(is_circle)
+        self.counter_raz_button.setEnabled(is_circle)
+        self._sync_numbering_controls()
 
     def _on_line_arrow_start_changed(self, checked: bool) -> None:
         self.canvas.current_line_arrow_start = checked
@@ -4156,8 +4490,8 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 2
+        @modified 2026-10-18
+        @version 3
 
         @param payload
 
@@ -4169,7 +4503,14 @@ class ImageEditorWindow(QMainWindow):
             self.stroke_width_spin.setValue(payload.stroke_width)
             self.stroke_width_spin.blockSignals(False)
             self.border_radius_spin.blockSignals(True)
-            self.border_radius_spin.setValue(payload.border_radius)
+            # Cercle numéroté : le rayon réel est porté par la géométrie
+            # (source de vérité, y compris après un redimensionnement par poignées).
+            radius_value = (
+                int(round(abs(payload.end.x() - payload.start.x()) / 2.0))
+                if payload.numbered
+                else payload.border_radius
+            )
+            self.border_radius_spin.setValue(radius_value)
             self.border_radius_spin.blockSignals(False)
             self._set_current_color(payload.color, apply_to_selection=False)
             if payload.kind == "label":
@@ -4299,6 +4640,10 @@ class ImageEditorWindow(QMainWindow):
             # Sélection faite sur l'image (Maj + clic) sans passer par la liste.
             payloads = list(self.canvas.selected_objects())
         if not payloads:
+            # Aucun objet sélectionné : « Supprimer » abandonne le rognage en cours
+            # sans effacer le rognage précédemment appliqué (Tâche 010).
+            if self.canvas.crop_rect is not None:
+                self.abandon_crop_edit()
             return
         if len(payloads) > 1:
             for payload in payloads:
@@ -4350,6 +4695,64 @@ class ImageEditorWindow(QMainWindow):
             self.brightness_slider.setValue(0)
             self.contrast_slider.setValue(100)
             self.statusBar().showMessage("Luminosité et contraste réinitialisés.")
+
+    def _move_selected_objects(self, delta: int) -> bool:
+        """
+        Description: Move the currently selected items of the objects list up or down
+        by ``delta`` positions, then synchronize canvas/recipe state.
+
+        @author ArnauldDev
+        @created 2026-10-14
+        @modified 2026-10-14
+        @version 1
+
+        @param delta
+        @returns
+        """
+        selected_items = list(self.objects_list.selectedItems())
+        if not selected_items or not self.objects_list.count():
+            return False
+
+        selected_rows = sorted(self.objects_list.row(item) for item in selected_items)
+        if delta < 0 and selected_rows[0] <= 0:
+            return False
+        if delta > 0 and selected_rows[-1] >= self.objects_list.count() - 1:
+            return False
+
+        # Prendre les éléments de bas en haut pour préserver les indices.
+        taken: list[QListWidgetItem] = []
+        for row in sorted(selected_rows, reverse=True):
+            taken.insert(0, self.objects_list.takeItem(row))
+
+        new_start = selected_rows[0] + delta
+        if new_start < 0:
+            new_start = 0
+        if new_start + len(taken) > self.objects_list.count() + len(taken):
+            new_start = self.objects_list.count()
+
+        for offset, item in enumerate(taken):
+            self.objects_list.insertItem(new_start + offset, item)
+            item.setSelected(True)
+
+        if taken:
+            self.objects_list.setCurrentItem(taken[0])
+            self.objects_list.scrollToItem(taken[0])
+
+        self._on_objects_reordered()
+        self.auto_save_recipe()
+        return True
+
+    def move_selected_object_up(self) -> bool:
+        return self._move_selected_objects(-1)
+
+    def move_selected_object_down(self) -> bool:
+        return self._move_selected_objects(1)
+
+    # Aliases utiles pour les tests et les raccourcis éventuels.
+    move_selected_up = move_selected_object_up
+    move_selected_down = move_selected_object_down
+    move_object_up = move_selected_object_up
+    move_object_down = move_selected_object_down
 
     def _on_objects_reordered(self, *_args: object) -> None:
         """
@@ -4425,7 +4828,8 @@ class ImageEditorWindow(QMainWindow):
             if ann.kind == "rect":
                 label = f"{tr('Rectangle')} #{ann.id} ({tr('Ép.')} {ann.stroke_width}px)"
             elif ann.kind == "circle":
-                label = f"{tr('Cercle')} #{ann.id} ({tr('Ép.')} {ann.stroke_width}px)"
+                number_part = f"{tr('N°')} {ann.text}, " if ann.numbered and ann.text else ""
+                label = f"{tr('Cercle')} #{ann.id} ({number_part}{tr('Ép.')} {ann.stroke_width}px)"
             elif ann.kind == "label":
                 label = f"{tr('Étiquette')} : \"{ann.text}\" ({tr('Ép.')} {ann.stroke_width}px)"
             elif ann.kind == "line":
@@ -4550,12 +4954,14 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 1
+        @modified 2026-10-18
+        @version 2
 
         @returns
         """
         self.refresh_objects_list()
+        # Le compteur de numérotation a pu changer (ajout, annuler/rétablir).
+        self._sync_numbering_controls()
         self.auto_save_recipe()
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
@@ -4571,6 +4977,13 @@ class ImageEditorWindow(QMainWindow):
 
         @returns
         """
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() in (
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+        ):
+            delta = -1 if event.key() == Qt.Key.Key_Up else 1
+            if self._move_selected_objects(delta):
+                return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.delete_selected_object()
         elif event.key() == Qt.Key.Key_Escape:
@@ -4727,12 +5140,12 @@ class ImageEditorWindow(QMainWindow):
 
     def show_tools_help(self) -> None:
         """
-        Description: Summarise every tool of the tool bar, the Ctrl grid snapping and the colour palette.
+        Description: Summarise every tool of the tool bar, the Ctrl grid snapping, the Shift proportion constraint, the multi-selection and the colour palette.
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-23
-        @version 2
+        @modified 2026-10-18
+        @version 3
 
         @returns
         """
@@ -4744,8 +5157,15 @@ class ImageEditorWindow(QMainWindow):
                 "sans Ctrl, l'objet suit librement la souris.",
             ),
             (
+                "Proportion",
+                "Maintenez Maj pendant le dessin d'un rectangle ou d'un cercle pour obtenir un carré ou un cercle "
+                "parfait, y compris au redimensionnement d'une forme existante par ses poignées ; avec ces deux "
+                "outils, Maj + clic reprend un tracé proportionné au lieu d'ajouter l'objet à la sélection.",
+            ),
+            (
                 "Sélection multiple",
-                "Maj + clic sur l'image ajoute ou retire un objet de la sélection ; dans la liste des annotations, "
+                "Maj + clic sur l'image ajoute ou retire un objet de la sélection (outils autres que Rectangle "
+                "et Cercle) ; dans la liste des annotations, "
                 "Maj + clic sélectionne une plage et Ctrl + clic ajoute ou retire un élément. "
                 "Glisser un objet sélectionné déplace tout le groupe.",
             ),
@@ -5159,6 +5579,15 @@ class ImageEditorWindow(QMainWindow):
         self.loupe_rotation_spin.valueChanged.connect(self.update_loupe_rotation)
         loupe_layout.addRow("Rotation", self.loupe_rotation_spin)
 
+        self.loupe_brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.loupe_brightness_slider.setRange(-100, 100)
+        self.loupe_brightness_slider.setValue(0)
+        self.loupe_brightness_slider.setToolTip(
+            "Luminosité de l'image affichée dans la loupe (indépendante de la luminosité globale)"
+        )
+        self.loupe_brightness_slider.valueChanged.connect(self.update_loupe_brightness)
+        loupe_layout.addRow("Luminosité de la loupe", self.loupe_brightness_slider)
+
         loupe_palette_label = QLabel("Palette de couleur")
         loupe_palette_label.setStyleSheet("font-weight: bold;")
         loupe_layout.addRow(loupe_palette_label)
@@ -5201,6 +5630,28 @@ class ImageEditorWindow(QMainWindow):
             shape_selector_row.addWidget(shape_button)
             self.annotation_shape_buttons[tool] = shape_button
         annotation_layout.addLayout(shape_selector_row)
+
+        add_annotation_separator()
+
+        # --- Numérotation (outil Cercle uniquement) ---
+        numbering_row = QHBoxLayout()
+        self.numbering_toggle_button = QPushButton("Numérotation")
+        self.numbering_toggle_button.setCheckable(True)
+        self.numbering_toggle_button.setToolTip(
+            "Cercle uniquement : un simple clic sur l'image place un cercle parfait portant le numéro suivant"
+        )
+        self.numbering_toggle_button.toggled.connect(self._on_numbering_toggled)
+        numbering_row.addWidget(self.numbering_toggle_button)
+        self.counter_label = QLabel(f"{tr('Compteur')} : 1")
+        self.counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        numbering_row.addWidget(self.counter_label, stretch=1)
+        self.counter_raz_button = QPushButton("RAZ")
+        self.counter_raz_button.setToolTip("Remet le compteur de numérotation à 1")
+        self.counter_raz_button.clicked.connect(self._reset_numbering_counter)
+        numbering_row.addWidget(self.counter_raz_button)
+        annotation_layout.addLayout(numbering_row)
+
+        add_annotation_separator()
 
         self.line_arrow_start_checkbox = QCheckBox("Flèche au début")
         self.line_arrow_start_checkbox.setToolTip("Ligne uniquement : affiche une flèche au premier point tracé")
@@ -5305,14 +5756,6 @@ class ImageEditorWindow(QMainWindow):
         # --- Export ---
         export_box = QGroupBox("Export")
         export_layout = QFormLayout(export_box)
-        self.width_spin = QSpinBox()
-        self.width_spin.setRange(50, 20000)
-        self.width_spin.setSingleStep(10)
-        self.width_spin.setValue(1200)
-        self.width_spin.valueChanged.connect(self._on_export_width_changed)
-        self.width_spin.valueChanged.connect(self._sync_export_preset_buttons)
-        export_layout.addRow("Largeur (px)", self.width_spin)
-
         presets_row = QHBoxLayout()
         self.export_preset_buttons: dict[int, QPushButton] = {}
         for preset in EXPORT_WIDTH_PRESETS:
@@ -5323,6 +5766,14 @@ class ImageEditorWindow(QMainWindow):
             presets_row.addWidget(preset_button)
             self.export_preset_buttons[preset] = preset_button
         export_layout.addRow("Préréglages", presets_row)
+
+        self.width_spin = QSpinBox()
+        self.width_spin.setRange(50, 20000)
+        self.width_spin.setSingleStep(10)
+        self.width_spin.setValue(1200)
+        self.width_spin.valueChanged.connect(self._on_export_width_changed)
+        self.width_spin.valueChanged.connect(self._sync_export_preset_buttons)
+        export_layout.addRow("Largeur (px)", self.width_spin)
 
         self.height_spin = QSpinBox()
         self.height_spin.setRange(50, 20000)
@@ -5361,12 +5812,13 @@ class ImageEditorWindow(QMainWindow):
         transformation_layout.addWidget(trapezoid_box)
         add_separator()
         transformation_layout.addWidget(crop_box)
+        add_separator()
+        transformation_layout.addWidget(adjust_box)
         transformation_layout.addStretch(1)
 
         self.option_pages = QStackedWidget()
         self.option_pages.addWidget(self._make_option_page("Déplacer", QLabel("Sélectionnez un outil dans la barre principale.")))
         self.option_pages.addWidget(self._make_option_page("Transformation", transformation_page))
-        self.option_pages.addWidget(adjust_box)
         self.option_pages.addWidget(loupe_box)
         self.option_pages.addWidget(annotation_box)
         self.option_pages.addWidget(export_box)
@@ -5374,13 +5826,13 @@ class ImageEditorWindow(QMainWindow):
             TOOL_VIEW: 0,
             TOOL_ROTATE_LINE: 1,
             TOOL_CROP: 1,
-            TOOL_LOUPE: 3,
-            TOOL_TEXT: 4,
-            TOOL_RECT: 4,
-            TOOL_CIRCLE: 4,
-            TOOL_LINE: 4,
-            "adjustments": 2,
-            "export": 5,
+            "adjustments": 1,
+            TOOL_LOUPE: 2,
+            TOOL_TEXT: 3,
+            TOOL_RECT: 3,
+            TOOL_CIRCLE: 3,
+            TOOL_LINE: 3,
+            "export": 4,
         }
         self.options_dock = QDockWidget("Options", self)
         self.options_dock.setObjectName("options_dock")
@@ -5586,22 +6038,28 @@ class ImageEditorWindow(QMainWindow):
 
     def load_source_image(self, path: str | Path) -> None:
         """
-        Description: Load the full-resolution source image and derive a fluid preview.
+        Description: Load the full-resolution source image and derive a fluid preview. The export size is silently clamped to the source dimensions (TASK-018). The circle numbering counter is reset to 1, then restored from the associated recipe when one exists.
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 2
+        @modified 2026-10-19
+        @version 4
 
         @param path
 
         @returns
         """
         self.source_path = Path(path)
+        self.original_image = load_image(self.source_path)
+        # La taille d'export ne peut pas dépasser l'image source : on recale
+        # les compteurs en silence (blockSignals, sinon valueChanged
+        # déclencherait auto_save_recipe sur un état encore partiel).
+        # Le reclamp précède compute_associated_paths pour que le suffixe
+        # « -xWIDTH » du nom d'export proposé reflète la valeur réelle.
+        self._clamp_export_size_to_source()
         self.current_json_path, self.default_export_path = compute_associated_paths(
             self.source_path, export_width=self.width_spin.value() if hasattr(self, "width_spin") else None
         )
-        self.original_image = load_image(self.source_path)
         self.preview_image, self.preview_scale = make_preview(self.original_image)
 
         self.angle_total = 0.0
@@ -5633,6 +6091,10 @@ class ImageEditorWindow(QMainWindow):
         self.layer_order = []
         self.canvas.loupes = []
         self._sync_loupe_controls(None)
+        # Le compteur de numérotation de l'outil Cercle repart toujours à 1
+        # pour une nouvelle image ; il sera restauré depuis la recette JSON
+        # plus bas si un fichier associé existe (continuité de session).
+        self.canvas.circle_counter = 1
 
         self.canvas.set_preview_image(self.preview_image)
         self._sync_height_to_width()
@@ -5664,6 +6126,10 @@ class ImageEditorWindow(QMainWindow):
                 f"aperçu {self.preview_image.width}×{self.preview_image.height} px) | "
                 f"Fichier JSON prévu : {self.current_json_path.name}"
             )
+
+        # Resynchronise le libellé « Compteur » du volet (la branche recette
+        # le fait déjà via apply_recipe_to_ui, pas la branche sans JSON).
+        self._sync_numbering_controls()
 
     def refresh_preview(self) -> None:
         """
@@ -5811,6 +6277,10 @@ class ImageEditorWindow(QMainWindow):
             self.objects_list.clearSelection()
             self.objects_list.blockSignals(False)
             self.delete_object_button.setEnabled(False)
+        # Abandonne le rognage en cours sans l'appliquer ni effacer
+        # le rognage précédemment appliqué (Tâche 010).
+        if self.canvas.crop_rect is not None:
+            self.abandon_crop_edit()
         self.canvas.update()
 
     def toggle_rotation_grid(self, checked: bool) -> None:
@@ -6092,6 +6562,27 @@ class ImageEditorWindow(QMainWindow):
         self.refresh_objects_list()
         self.auto_save_recipe()
 
+    def abandon_crop_edit(self) -> None:
+        """
+        Description: Abandonne le rognage actuellement dessiné (canvas.crop_rect)
+        sans effacer le rognage précédemment appliqué et conservé dans crop_box.
+
+        @author ArnauldDev
+        @created 2026-10-18
+        @modified 2026-10-18
+        @version 1
+
+        @returns
+        """
+        self.canvas.crop_rect = None
+        if self.canvas.selected_item == "crop":
+            self.canvas.selected_item = None
+        self._rebuild_preview_from_original()
+        self.canvas.update()
+        self.refresh_objects_list()
+        self.auto_save_recipe()
+        self.statusBar().showMessage("Rognage abandonné.")
+
     def reset_crop(self) -> None:
         """
         Description:
@@ -6115,14 +6606,94 @@ class ImageEditorWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Export size controls
     # ------------------------------------------------------------------
+    def _export_max_width(self) -> int:
+        """
+        Description: Largest export width allowed: the width of the original source image (20000 px while no image is loaded, i.e. the historical spin box ceiling).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        source = getattr(self, "original_image", None)
+        if source is None or source.width == 0:
+            return 20000
+        return source.width
+
+    def _export_max_height(self) -> int:
+        """
+        Description: Largest export height allowed: the height of the original source image (20000 px while no image is loaded).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        source = getattr(self, "original_image", None)
+        if source is None or source.height == 0:
+            return 20000
+        return source.height
+
+    def _reject_export_size(self, body: str, maximum: int) -> int:
+        """
+        Description: Modal error displayed when an export dimension exceeds the source image size (TASK-018); the limit is also reported in the status bar.
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @param body  message d'erreur expliquant le dépassement
+        @param maximum  valeur maximale autorisée (taille de l'image source)
+        @returns la valeur corrigée, bornée à maximum
+        """
+        QMessageBox.warning(self, tr("Taille d'export trop grande"), body)
+        self.statusBar().showMessage(tr("Export limité à la taille de l'image source") + f" ({maximum} px)")
+        return maximum
+
+    def _clamp_export_size_to_source(self) -> None:
+        """
+        Description: Silently fit both export spin boxes inside the source image size (blockSignals, so no auto_save_recipe fires on a partially loaded state).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        if not hasattr(self, "width_spin"):
+            return
+        max_width = self._export_max_width()
+        max_height = self._export_max_height()
+        self.width_spin.blockSignals(True)
+        self.height_spin.blockSignals(True)
+        try:
+            # Une source plus petite que le minimum historique (50 px)
+            # reste saisissable : le minimum suit la taille de la source.
+            self.width_spin.setMinimum(min(50, max_width))
+            self.height_spin.setMinimum(min(50, max_height))
+            if self.width_spin.value() > max_width:
+                self.width_spin.setValue(max_width)
+            if self.height_spin.value() > max_height:
+                self.height_spin.setValue(max_height)
+        finally:
+            self.width_spin.blockSignals(False)
+            self.height_spin.blockSignals(False)
+        self._sync_export_preset_buttons(self.width_spin.value())
+
     def _sync_height_to_width(self) -> None:
         """
         Description: Keep the export height proportional to the export width whenever the working image (rotation/crop) changes, so the export always matches the image's own aspect ratio.
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 1
+        @modified 2026-10-19
+        @version 2
 
         @returns
         """
@@ -6131,7 +6702,8 @@ class ImageEditorWindow(QMainWindow):
         self._sync_export_size_guard = True
         ratio = self.preview_image.height / self.preview_image.width
         target = round(self.width_spin.value() * ratio)
-        target = max(self.height_spin.minimum(), min(self.height_spin.maximum(), target))
+        upper = min(self.height_spin.maximum(), self._export_max_height())
+        target = max(min(self.height_spin.minimum(), upper), min(upper, target))
         self.height_spin.blockSignals(True)
         self.height_spin.setValue(target)
         self.height_spin.blockSignals(False)
@@ -6139,17 +6711,28 @@ class ImageEditorWindow(QMainWindow):
 
     def apply_export_width_preset(self, width: int) -> None:
         """
-        Description: Apply one of the export width presets (800, 1200, 1920 px); the height follows the image ratio.
+        Description: Apply one of the export width presets (800, 1200, 1920 px); the height follows the image ratio. A preset wider than the source image is rejected with a modal error (TASK-018).
 
         @author ArnauldDev
         @created 2026-09-23
-        @modified 2026-09-23
-        @version 1
+        @modified 2026-10-19
+        @version 2
 
         @param width
 
         @returns
         """
+        max_width = self._export_max_width()
+        if width > max_width:
+            self._reject_export_size(
+                tr("La largeur d'export ne peut pas dépasser celle de l'image source")
+                + f" ({max_width} px).",
+                max_width,
+            )
+            # Le clic a déjà basculé le bouton : on resynchronise l'affichage
+            # avec la valeur réelle (inchangée) puis on abandonne la demande.
+            self._sync_export_preset_buttons(self.width_spin.value())
+            return
         self.width_spin.setValue(width)
         self._sync_export_preset_buttons(self.width_spin.value())
         self.statusBar().showMessage(tr("Largeur d'export :") + f" {width} px")
@@ -6160,24 +6743,28 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-23
-        @modified 2026-09-23
-        @version 1
+        @modified 2026-10-19
+        @version 2
 
         @param value
 
         @returns
         """
+        # La valeur reçue peut encore être celle émise avant le reclamp de
+        # _on_export_width_changed (les slots voisins sont appelés avec la
+        # même valeur) : on recale avant de comparer aux préréglages.
+        value = min(value, self._export_max_width())
         for preset, button in getattr(self, "export_preset_buttons", {}).items():
             button.setChecked(preset == value)
 
     def _on_export_width_changed(self, value: int) -> None:
         """
-        Description:
+        Description: Keep the export height proportional to the width and reject any width larger than the source image with a modal error (TASK-018).
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 1
+        @modified 2026-10-19
+        @version 2
 
         @param value
 
@@ -6185,9 +6772,25 @@ class ImageEditorWindow(QMainWindow):
         """
         if self._sync_export_size_guard or self.preview_image is None or self.preview_image.width == 0:
             return
+        max_width = self._export_max_width()
+        if value > max_width:
+            value = self._reject_export_size(
+                tr("La largeur d'export ne peut pas dépasser celle de l'image source")
+                + f" ({max_width} px).",
+                max_width,
+            )
+            # blockSignals : le reclamp ne doit pas re-déclencher ce slot
+            # (ni les slots voisins une seconde fois).
+            self.width_spin.blockSignals(True)
+            self.width_spin.setValue(value)
+            self.width_spin.blockSignals(False)
         self._sync_export_size_guard = True
         ratio = self.preview_image.height / self.preview_image.width
-        target = max(self.height_spin.minimum(), min(self.height_spin.maximum(), round(value * ratio)))
+        target = round(value * ratio)
+        # La hauteur dérivée reste silencieuse : elle n'est pas saisie par
+        # l'utilisateur, seul le compte rendu en temps réel la borne.
+        upper = min(self.height_spin.maximum(), self._export_max_height())
+        target = max(min(self.height_spin.minimum(), upper), min(upper, target))
         self.height_spin.setValue(target)
         self._sync_export_size_guard = False
 
@@ -6197,12 +6800,12 @@ class ImageEditorWindow(QMainWindow):
 
     def _on_export_height_changed(self, value: int) -> None:
         """
-        Description:
+        Description: Keep the export width proportional to the height and reject any height larger than the source image with a modal error (TASK-018).
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 2
+        @modified 2026-10-19
+        @version 3
 
         @param value
 
@@ -6210,9 +6813,21 @@ class ImageEditorWindow(QMainWindow):
         """
         if self._sync_export_size_guard or self.preview_image is None or self.preview_image.height == 0:
             return
+        max_height = self._export_max_height()
+        if value > max_height:
+            value = self._reject_export_size(
+                tr("La hauteur d'export ne peut pas dépasser celle de l'image source")
+                + f" ({max_height} px).",
+                max_height,
+            )
+            self.height_spin.blockSignals(True)
+            self.height_spin.setValue(value)
+            self.height_spin.blockSignals(False)
         self._sync_export_size_guard = True
         ratio = self.preview_image.width / self.preview_image.height
-        target = max(self.width_spin.minimum(), min(self.width_spin.maximum(), round(value * ratio)))
+        target = round(value * ratio)
+        upper = min(self.width_spin.maximum(), self._export_max_width())
+        target = max(min(self.width_spin.minimum(), upper), min(upper, target))
         self.width_spin.setValue(target)
         self._sync_export_size_guard = False
         if self.source_path is not None:
@@ -6240,8 +6855,8 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-23
-        @modified 2026-09-23
-        @version 1
+        @modified 2026-10-18
+        @version 2
 
         @param loupe
 
@@ -6263,6 +6878,7 @@ class ImageEditorWindow(QMainWindow):
             (self.loupe_rotation_spin, loupe.rotation),
             (self.loupe_stroke_width_spin, loupe.stroke_width),
             (self.loupe_arrow_stroke_width_spin, loupe.arrow_stroke_width),
+            (self.loupe_brightness_slider, int(round(loupe.brightness))),
         ):
             spin.blockSignals(True)
             spin.setValue(value)
@@ -6510,6 +7126,25 @@ class ImageEditorWindow(QMainWindow):
         loupe.arrow_stroke_width = value
         self._after_loupe_change()
 
+    def update_loupe_brightness(self, value: int) -> None:
+        """
+        Description: Local brightness of the current loupe's magnified content (independent from the global brightness), saved live in the JSON.
+
+        @author ArnauldDev
+        @created 2026-10-18
+        @modified 2026-10-18
+        @version 1
+
+        @param value
+
+        @returns
+        """
+        loupe = self.current_loupe()
+        if loupe is None:
+            return
+        loupe.brightness = value
+        self._after_loupe_change()
+
     # ------------------------------------------------------------------
     # File dialogs
     # ------------------------------------------------------------------
@@ -6533,6 +7168,26 @@ class ImageEditorWindow(QMainWindow):
         self.load_source_image(file_name)
         # ③ Mémoriser dans l'historique des fichiers récents après chargement réussi
         self._add_to_recent_files(Path(file_name))
+
+    def open_image_folder(self) -> None:
+        """
+        Description: Ouvre le gestionnaire de fichiers au dossier contenant l'image actuellement ouverte.
+
+        @author ArnauldDev
+        @created 2026-10-18
+        @version 1
+
+        @returns
+        """
+        if self.source_path is None:
+            self.statusBar().showMessage("Aucune image chargée.")
+            return
+        folder = self.source_path.parent
+        if not folder.exists():
+            self.statusBar().showMessage(f"Dossier introuvable : {folder}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        self.statusBar().showMessage(f"Dossier ouvert : {folder}")
 
     def export_image(self) -> None:
         """
@@ -6675,8 +7330,8 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 2
+        @modified 2026-10-18
+        @version 4
 
         @returns
         """
@@ -6703,6 +7358,7 @@ class ImageEditorWindow(QMainWindow):
                 bold_text=item.bold_text,
                 line_arrow_start=item.line_arrow_start,
                 line_arrow_end=item.line_arrow_end,
+                numbered=item.numbered,
             )
             for item in self.canvas.annotations
         ]
@@ -6725,6 +7381,7 @@ class ImageEditorWindow(QMainWindow):
                 stroke_width=max(1, round(loupe.stroke_width * scale)),
                 rotation=loupe.rotation,
                 arrow_stroke_width=max(1, round(loupe.arrow_stroke_width * scale)),
+                brightness=loupe.brightness,
             )
             for loupe in self.canvas.loupes
         ]
@@ -6746,6 +7403,7 @@ class ImageEditorWindow(QMainWindow):
             export_width=self.width_spin.value(),
             export_height=self.height_spin.value(),
             stroke_width=self.canvas.current_stroke_width,
+            circle_counter=self.canvas.circle_counter,
             annotations=annotations,
             loupes=loupe_specs,
             custom_colors=self._custom_colors(),
@@ -6754,12 +7412,12 @@ class ImageEditorWindow(QMainWindow):
 
     def apply_recipe_to_ui(self, recipe: ProcessingRecipe) -> None:
         """
-        Description: Populate widgets/canvas state from a loaded recipe (preview space).
+        Description: Populate widgets/canvas state from a loaded recipe (preview space). Oversized export dimensions are clamped to the source image size (TASK-018).
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 2
+        @modified 2026-10-19
+        @version 5
 
         @param recipe
 
@@ -6813,15 +7471,28 @@ class ImageEditorWindow(QMainWindow):
         # charger était alors immédiatement réécrit avec un état partiel
         # (annotations/loupes/layer_order vidés, stroke_width remis au
         # défaut), perdant définitivement le reste de la recette.
+        # Des JSON anciens peuvent porter une taille d'export supérieure à
+        # l'image source : reclamp silencieux (signaux bloqués — voir le
+        # commentaire plus haut — et pas de modal à l'ouverture d'un
+        # fichier, ce n'est pas une saisie utilisateur). TASK-018.
+        export_clamped = False
         if recipe.export_width:
+            requested = int(recipe.export_width)
+            max_width = self._export_max_width()
+            export_clamped = requested > max_width
             self.width_spin.blockSignals(True)
-            self.width_spin.setValue(int(recipe.export_width))
+            self.width_spin.setValue(min(requested, max_width))
             self.width_spin.blockSignals(False)
             self._sync_export_preset_buttons(self.width_spin.value())
         if recipe.export_height:
+            requested = int(recipe.export_height)
+            max_height = self._export_max_height()
+            export_clamped = export_clamped or requested > max_height
             self.height_spin.blockSignals(True)
-            self.height_spin.setValue(int(recipe.export_height))
+            self.height_spin.setValue(min(requested, max_height))
             self.height_spin.blockSignals(False)
+        if export_clamped:
+            self.statusBar().showMessage(tr("Export limité à la taille de l'image source"))
 
         # Épaisseur du trait
         self.canvas.current_stroke_width = recipe.stroke_width
@@ -6829,6 +7500,9 @@ class ImageEditorWindow(QMainWindow):
             self.stroke_width_spin.blockSignals(True)
             self.stroke_width_spin.setValue(recipe.stroke_width)
             self.stroke_width_spin.blockSignals(False)
+
+        # Compteur de numérotation de l'outil Cercle (prochain numéro posé)
+        self.canvas.circle_counter = max(1, recipe.circle_counter)
 
         self.canvas.annotations = [
             AnnotationItem(
@@ -6848,6 +7522,7 @@ class ImageEditorWindow(QMainWindow):
                 bold_text=a.bold_text,
                 line_arrow_start=a.line_arrow_start,
                 line_arrow_end=a.line_arrow_end,
+                numbered=a.numbered,
             )
             for a in recipe.annotations
         ]
@@ -6873,6 +7548,7 @@ class ImageEditorWindow(QMainWindow):
                 rotation=loupe.rotation,
                 stroke_width=max(1, round(loupe.stroke_width / scale)),
                 arrow_stroke_width=max(1, round(loupe.arrow_stroke_width / scale)),
+                brightness=loupe.brightness,
             )
             for loupe in recipe.loupes
         ]
@@ -6880,6 +7556,7 @@ class ImageEditorWindow(QMainWindow):
 
         self._rebuild_preview_from_original()
         self.refresh_objects_list()
+        self._sync_numbering_controls()
 
 
 # Import main as launch_editor from external scripts if needed

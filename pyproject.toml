@@ -5,6 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "image-annotation-tool"
 version = "1.0.0"
+license = {text = "GPL-3.0-or-later"}
+# Ou via les classifiers :
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+]
 description = "Outil d'annotation et de traitement d'images pour le plateau mécatronique"
 authors = [
     { name = "Arnauld BIGANZOLI", email = "arnauld.biganzoli@utoulouse.fr" }

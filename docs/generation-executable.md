@@ -3,7 +3,7 @@
   Description: Génération de l'exécutable autonome d'Image Annotation Tool avec PyInstaller (Windows, macOS, Linux).
   Developer: ArnauldDev
   Created Date: 2026-09-23
-  Last Modified: 2026-09-27
+  Last Modified: 2026-09-30
 -->
 
 <h3>Génération de l'exécutable</h3>
@@ -20,6 +20,7 @@ Pour distribuer l'application sur des postes **sans Python**, on la « gèle » 
   - [Données embarquées (`datas`)](#données-embarquées-datas)
 - [4. Construire](#4-construire)
 - [5. Windows](#5-windows)
+- [5.1. Lancer l'application Windows](#51-lancer-lapplication-windows)
 - [6. macOS](#6-macos)
 - [7. Linux](#7-linux)
 - [8. Liste de vérification de l'exécutable](#8-liste-de-vérification-de-lexécutable)
@@ -40,7 +41,7 @@ Dans l'environnement virtuel du projet (voir [Environnement de développement](e
 
 ```bash
 python -m pip install -e ".[dev]"      # installe PyInstaller (>= 6.0) et pytest
-python -m pytest -q                     # toujours vérifier les tests avant un build
+python -m pytest -q                    # toujours vérifier les tests avant un build
 ```
 
 ## 3. Le fichier `image_annotation_tool.spec`
@@ -110,6 +111,12 @@ Le résultat se trouve dans `dist/` ; les fichiers intermédiaires dans `build/`
 python build_exe.py
 .\dist\ImageAnnotationTool.exe
 ```
+
+## 5.1. Lancer l'application Windows
+
+Double-cliquez sur l'exécutable `ImageAnnotationTool.exe`, au premier lancement Windows peut afficher un avertissement de sécurité car l'exécutable n'est pas signé, cliquez sur « Plus d'infos » puis « Exécuter quand même » pour lancer l'application.
+
+![Premier lancement de l'exécutable sous Windows](../images/lancement-executable-windows-iat.png)
 
 ## 6. macOS
 

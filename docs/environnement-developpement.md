@@ -3,7 +3,7 @@
   Description: Mise en place de l'environnement de développement d'Image Annotation Tool (Python, venv, tests, organisation du projet).
   Developer: ArnauldDev
   Created Date: 2026-09-23
-  Last Modified: 2026-09-29
+  Last Modified: 2026-09-27
 -->
 
 <h3>Environnement de développement</h3>
@@ -80,8 +80,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Une fois activé, l'invite affiche `(.venv)`, cela confirme que vous êtes dans l'environnement virtuel.\
-Pour en sortir quand vous avez fini, tapez simplement : `deactivate`.
+Une fois activé, l'invite affiche `(.venv)`, cela confirme que vous êtes dans l'environnement virtuel. Pour en sortir quand vous avez fini, tapez simplement : `deactivate`.
 
 ## 4. Installer les dépendances
 
@@ -90,8 +89,7 @@ Deux méthodes équivalentes :
 ```bash
 python -m pip install --upgrade pip
 
-# a) Installation avec les versions figées du fichier requirements.txt
-#    (c'est la méthode la plus simple, si vous souhaitez seulement utiliser le projet sans installer les outils de construction de l'exécutable)
+# a) Installation avec les versions figées du fichier requirements.txt (c'est la méthode la plus simple, si vous souhaitez seulement utiliser le projet sans installer les outils de construction de l'exécutable)
 python -m pip install -r requirements.txt
 ```
 
