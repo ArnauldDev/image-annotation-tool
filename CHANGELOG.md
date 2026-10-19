@@ -33,6 +33,7 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/lang/fr/).
 
 **Export et navigation**
 
+- Ajout de boutons pour la sélection du format d'exportation "JPEG" ou "TIFF", permettant à l'utilisateur de choisir le format d'exportation de son choix.
 - Les préréglages d'export sont maintenant affichés en premier dans les options d'export (TASK-008)
 - Nouvelle option de menu pour ouvrir le dossier de l'image courante (TASK-016)
 

@@ -196,6 +196,32 @@ QPushButton:disabled {
     border: 1px solid #2E3248;
 }
 
+/* Format d'export (TASK-019) : les deux boutons restent cliquables, la
+   sélection est exclusive et rendue par un état actif mis en avant et un état
+   de repos légèrement grisé. Sélecteurs par propriété dynamique Qt. */
+QPushButton[exportFormatActive="true"] {
+    background-color: #00F5FF;
+    color: #0F111A;
+    border: 1px solid #00F5FF;
+    font-weight: bold;
+}
+
+QPushButton[exportFormatActive="true"]:hover {
+    background-color: #66F8FF;
+    color: #0F111A;
+}
+
+QPushButton[exportFormatActive="false"] {
+    background-color: #0F111A;
+    color: #6B7280;
+    border: 1px solid #2E3248;
+}
+
+QPushButton[exportFormatActive="false"]:hover {
+    background-color: #1F2338;
+    color: #A9B4C4;
+}
+
 /* ---- Champs de saisie ----------------------------------------------------- */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     background-color: #161824;

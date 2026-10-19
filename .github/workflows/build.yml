@@ -5,7 +5,7 @@
 #               Adapté de .gitlab-ci.yml.
 #  Developer: ArnauldDev
 #  Created Date: 2026-09-29
-#  Last Modified: 2026-09-29
+#  Last Modified: 2026-10-19
 # ===================================================================
 #
 # Résumé :
@@ -20,6 +20,10 @@
 #               du job build pour rétablir le mode strict) ;
 #   - release : crée la Release GitHub et y attache les exécutables,
 #               uniquement sur une étiquette vX.Y.Z.
+#
+# Nom des fichiers produits : ImageAnnotationTool-<version>-<plateforme>.<ext>
+#   (ex. ImageAnnotationTool-v1.0.1-windows.exe). <version> vient de
+#   l'étiquette ; hors étiquette (lancement manuel), c'est « <branche>-dev ».
 #
 # Publier la version 1.0.0 avec un tag léger:
 #   git tag v1.0.0
@@ -146,6 +150,20 @@ jobs:
       - name: Récupérer le code
         uses: actions/checkout@v4
 
+      # Version utilisée dans le nom des fichiers (bash disponible sur les
+      # trois systèmes, y compris Windows via Git Bash).
+      #   - étiquette v1.0.1      -> VERSION=v1.0.1
+      #   - lancement manuel (ex. branche main) -> VERSION=main-dev
+      #     (les « / » d'un nom de branche sont remplacés par « - »)
+      - name: Définir la version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME//\//-}-dev" >> "$GITHUB_ENV"
+          fi
+
       - name: Configurer Python
         uses: actions/setup-python@v5
         with:
@@ -173,16 +191,16 @@ jobs:
       - name: Empaqueter (Linux)
         if: runner.os == 'Linux'
         run: |
-          mv dist/ImageAnnotationTool dist/ImageAnnotationTool-linux-x86_64
-          chmod +x dist/ImageAnnotationTool-linux-x86_64
-          tar -czf dist/ImageAnnotationTool-linux-x86_64.tar.gz \
-            -C dist ImageAnnotationTool-linux-x86_64
+          NAME="ImageAnnotationTool-${VERSION}-linux-x86_64"
+          mv dist/ImageAnnotationTool "dist/${NAME}"
+          chmod +x "dist/${NAME}"
+          tar -czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
 
       # --- Windows : simple renommage de l'.exe
       - name: Empaqueter (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Rename-Item dist\ImageAnnotationTool.exe ImageAnnotationTool-windows.exe
+        run: Rename-Item dist\ImageAnnotationTool.exe "ImageAnnotationTool-$env:VERSION-windows.exe"
 
       # --- macOS : archive .zip (signature / notarisation facultatives :
       #     voir docs/generation-executable.md)
@@ -190,7 +208,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           ditto -c -k --keepParent dist/ImageAnnotationTool \
-            "dist/ImageAnnotationTool-macos-$(uname -m).zip"
+            "dist/ImageAnnotationTool-${VERSION}-macos-$(uname -m).zip"
 
       - name: Sauvegarder l'exécutable
         uses: actions/upload-artifact@v4
@@ -198,9 +216,9 @@ jobs:
           name: ImageAnnotationTool-${{ matrix.name }}
           # Un seul motif par système, les autres ne correspondent à rien.
           path: |
-            dist/ImageAnnotationTool-linux-x86_64.tar.gz
-            dist/ImageAnnotationTool-windows.exe
-            dist/ImageAnnotationTool-macos-*.zip
+            dist/ImageAnnotationTool-*-linux-x86_64.tar.gz
+            dist/ImageAnnotationTool-*-windows.exe
+            dist/ImageAnnotationTool-*-macos-*.zip
           if-no-files-found: error
           retention-days: 365
 
@@ -236,7 +254,7 @@ jobs:
             Exécutables Windows, macOS et Linux ci-dessous.
           generate_release_notes: true
           files: |
-            release/ImageAnnotationTool-windows.exe
-            release/ImageAnnotationTool-macos-*.zip
-            release/ImageAnnotationTool-linux-x86_64.tar.gz
+            release/ImageAnnotationTool-*-windows.exe
+            release/ImageAnnotationTool-*-macos-*.zip
+            release/ImageAnnotationTool-*-linux-x86_64.tar.gz
           fail_on_unmatched_files: true

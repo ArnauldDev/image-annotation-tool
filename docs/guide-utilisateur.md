@@ -193,9 +193,13 @@ Un **clic droit** sur l'image ouvre un menu contextuel ; l'objet situé sous le 
 
 1. Cliquez sur `Exporter l'image` (barre d'outils ou menu `Fichier`).
 2. Choisissez la largeur : préréglages **800**, **1200** ou **1920 px**, ou saisie libre de la largeur ou de la hauteur (les proportions sont toujours conservées).
-3. Cliquez sur `Exporter l'image annotée` et choisissez le fichier de destination (JPEG). Le nom proposé suit la convention `nom-iat-x<largeur>.jpg`.
+3. Choisissez le format : **JPEG** (fichier léger) ou **TIFF** (sans perte).
+4. La ligne **`Taille estimée`** indique la taille du fichier qui sera produit pour ces réglages ; elle se met à jour automatiquement (un « ≈ » précède la valeur pendant le calcul).
+5. Cliquez sur `Exporter l'image annotée` et choisissez le fichier de destination (JPEG). Le nom proposé suit la convention `nom-iat-x<largeur>.jpg`.
 
 L'export **rejoue la recette sur l'image originale en pleine résolution** (rééchantillonnage Lanczos, qualité JPEG 95) : la qualité n'est pas limitée par l'aperçu affiché à l'écran.
+
+L'estimation de la **`Taille estimée`** utilise exactement le même moteur que l'export : la valeur affichée correspond à la taille réelle du fichier produit. Le calcul s'effectue en arrière-plan pour ne jamais bloquer l'interface.
 
 Une fenêtre de confirmation s'affiche après l'export ; elle peut être désactivée via `Configuration > Notification après l'export`. Le message dans la barre d'état est toujours affiché.
 

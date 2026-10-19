@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import math
 from dataclasses import dataclass, field
@@ -22,6 +23,98 @@ DEFAULT_PREVIEW_MAX_DIMENSION = 1600
 #: Fond des étiquettes (et des cercles numérotés), RGB partagé entre
 #: l'aperçu de l'éditeur (avec alpha) et le rendu pleine résolution.
 LABEL_BACKGROUND_RGB = (20, 24, 33)
+
+#: Formats d'export proposés dans le panneau « Exporter l'image » (TASK-019).
+#: JPEG conserve la qualité historique (95) ; TIFF est enregistré sans perte.
+EXPORT_FORMATS = ("jpeg", "tiff")
+
+#: Format retenu pour toute nouvelle image tant que l'utilisateur n'en choisit
+#: pas un autre.
+DEFAULT_EXPORT_FORMAT = "jpeg"
+
+
+def normalize_export_format(value: Any) -> str:
+    """Return a supported export format code, defaulting to JPEG.
+
+    Accepts the historical aliases ``jpg``/``tif`` and is case-insensitive so
+    an older or hand-edited recipe always loads (TASK-019).
+    """
+    aliases = {"jpg": "jpeg", "jpeg": "jpeg", "tif": "tiff", "tiff": "tiff"}
+    return aliases.get(str(value or "").strip().lower(), DEFAULT_EXPORT_FORMAT)
+
+
+def export_extension(export_format: str) -> str:
+    """Return the file extension (leading dot) matching an export format."""
+    return ".tif" if normalize_export_format(export_format) == "tiff" else ".jpg"
+
+
+def _save_with_format(image: Image.Image, output: Path, export_format: str) -> None:
+    """Save ``image`` to ``output`` in the requested format.
+
+    JPEG keeps the historical ``quality=95``; TIFF is written losslessly
+    (LZW compression, no data loss on the pixel values).
+    """
+    if normalize_export_format(export_format) == "tiff":
+        image.save(output, format="TIFF", compression="tiff_lzw")
+    else:
+        image.save(output, format="JPEG", quality=95)
+
+
+def _save_to_buffer(image: Image.Image, export_format: str) -> bytes:
+    """Encode ``image`` in memory exactly like ``_save_with_format`` (no disk I/O).
+
+    Reusing the same Pillow parameters as the real export guarantees that the
+    estimated size matches the produced file. JPEG keeps ``quality=95`` and
+    TIFF is written losslessly with LZW compression.
+    """
+    buffer = io.BytesIO()
+    if normalize_export_format(export_format) == "tiff":
+        image.save(buffer, format="TIFF", compression="tiff_lzw")
+    else:
+        image.save(buffer, format="JPEG", quality=95)
+    return buffer.getvalue()
+
+
+def estimate_export_size(recipe: "ProcessingRecipe", image: Image.Image | None = None) -> int | None:
+    """Return the exact byte size of the export produced by ``recipe``.
+
+    The recipe is replayed on the full-resolution source image through
+    :func:`apply_recipe` and encoded in memory with the very same parameters as
+    :func:`_save_with_format`, so the returned value matches the exported file.
+    Nothing is written to disk.
+
+    @param recipe  recette complète telle qu'utilisée par l'export réel
+    @param image  image source pleine résolution déjà chargée ; si ``None``, elle
+        est relue depuis ``recipe.source_image`` (comme ``process_image_with_recipe``)
+    @returns le nombre d'octets encodés, ou ``None`` si aucune image n'est
+        disponible (source introuvable et pas d'image fournie)
+    """
+    source = image
+    if source is None:
+        source_path = Path(str(recipe.source_image or ""))
+        if not source_path.exists():
+            return None
+        source = load_image(source_path)
+    result = apply_recipe(source, recipe)
+    return len(_save_to_buffer(result, recipe.export_format))
+
+
+def format_file_size(size_bytes: int | None) -> str:
+    """Format a byte count as a localized French size (``38,9 Mo``).
+
+    Units are adaptive (octets / Ko / Mo / Go) with one decimal place and a
+    comma as decimal separator, as expected by the French interface. ``None``
+    (no image or invalid parameters) is rendered as an em dash.
+    """
+    if size_bytes is None or size_bytes < 0:
+        return "—"
+    if size_bytes < 1000:
+        return f"{size_bytes} o"
+    for unit, divisor in (("Go", 1000 ** 3), ("Mo", 1000 ** 2), ("Ko", 1000)):
+        if size_bytes >= divisor:
+            value = size_bytes / divisor
+            return f"{value:.1f}".replace(".", ",") + f" {unit}"
+    return f"{size_bytes} o"
 
 
 def load_image(path: str | Path) -> Image.Image:
@@ -180,8 +273,9 @@ def process_image(
     contrast: float = 1.0,
     width: Optional[int] = None,
     height: Optional[int] = None,
+    export_format: str = DEFAULT_EXPORT_FORMAT,
 ) -> Path:
-    """Load, transform, and export an image as JPEG."""
+    """Load, transform, and export an image as JPEG or TIFF."""
     image = load_image(input_path)
     if angle:
         image = rotate_image(image, angle)
@@ -190,7 +284,7 @@ def process_image(
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output, format="JPEG", quality=95)
+    _save_with_format(image, output, export_format)
     return output
 
 
@@ -413,14 +507,19 @@ def next_annotation_id(annotations: list[Any]) -> int:
     return max((int(getattr(annotation, "id", 0)) for annotation in annotations), default=0) + 1
 
 
-def compute_associated_paths(image_path: str | Path, export_width: int | None = None) -> tuple[Path, Path]:
-    """Compute the associated recipe JSON and default export JPEG paths.
+def compute_associated_paths(
+    image_path: str | Path,
+    export_width: int | None = None,
+    export_format: str = DEFAULT_EXPORT_FORMAT,
+) -> tuple[Path, Path]:
+    """Compute the associated recipe JSON and default export image paths.
 
     Conventions:
     - 'name-raw.jpg' -> ('name-iat.json', 'name-iat.jpg')
     - 'name_raw.jpg' -> ('name-iat.json', 'name-iat.jpg')
     - 'name.jpg'     -> ('name-iat.json', 'name-iat.jpg')
     - optional export width adds a suffix like '-x1400' before the extension
+    - the export extension follows ``export_format`` ('.jpg' or '.tif', TASK-019)
     """
     path = Path(image_path)
     stem = path.stem
@@ -434,7 +533,7 @@ def compute_associated_paths(image_path: str | Path, export_width: int | None = 
 
     export_suffix = f"-x{int(export_width)}" if export_width and int(export_width) > 0 else ""
     json_path = path.parent / f"{base_stem}-iat.json"
-    export_path = path.parent / f"{base_stem}-iat{export_suffix}.jpg"
+    export_path = path.parent / f"{base_stem}-iat{export_suffix}{export_extension(export_format)}"
     return json_path, export_path
 
 
@@ -458,6 +557,9 @@ class ProcessingRecipe:
     crop: Optional[tuple[float, float, float, float]] = None  # (x1, y1, x2, y2)
     export_width: Optional[int] = None
     export_height: Optional[int] = None
+    #: Export image format ("jpeg" or "tiff", TASK-019). Older recipes omit the
+    #: key and fall back to JPEG in :func:`normalize_export_format`.
+    export_format: str = DEFAULT_EXPORT_FORMAT
     stroke_width: int = 3
     #: Prochain numéro posé par le mode « Numérotation » de l'outil Cercle.
     #: Rétrocompatible : un JSON sans la clé repart à 1.
@@ -484,7 +586,11 @@ class ProcessingRecipe:
             "contrast": self.contrast,
             "trapezoid": list(self.trapezoid),
             "crop": list(self.crop) if self.crop is not None else None,
-            "export": {"width": self.export_width, "height": self.export_height},
+            "export": {
+                "width": self.export_width,
+                "height": self.export_height,
+                "format": self.export_format,
+            },
             "stroke_width": self.stroke_width,
             "circle_counter": self.circle_counter,
             "annotations": [a.to_dict() for a in self.annotations],
@@ -536,6 +642,7 @@ class ProcessingRecipe:
             crop=tuple(crop) if crop else None,  # type: ignore[arg-type]
             export_width=export.get("width"),
             export_height=export.get("height"),
+            export_format=normalize_export_format(export.get("format")),
             stroke_width=int(data.get("stroke_width", 3)),
             circle_counter=max(1, int(data.get("circle_counter", 1))),
             annotations=annotations,
@@ -877,7 +984,7 @@ def process_image_with_recipe(recipe: ProcessingRecipe, output_path: str | Path)
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    result.save(output, format="JPEG", quality=95)
+    _save_with_format(result, output, recipe.export_format)
     return output
 
 

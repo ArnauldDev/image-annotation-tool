@@ -6,17 +6,12 @@
 
 > L'agent doit prendre la première tâche non cochée dans cette section.
 
-- [ ] **[TASK-019]** Outil Annotation : Remplissage des formes (Rectangle/Cercle)
-  - **Context:** Permettre de colorer le fond des formes géométriques.
-  - **Spec:** Ajouter une propriété au panneau de droite, active pour les outils rectangle et cercle, permettant le remplissage de la forme avec choix de couleur. Synchroniser l'état (grisé/actif) en fonction de l'outil.
-  - **Acceptance:** La couleur de remplissage est modifiable via l'UI et sauvegardée dans le fichier JSON.
-
-- [ ] **[TASK-020]** Menu Aide : "Aide sur les outils" non bloquante
+- [ ] **[TASK-021]** Menu Aide : "Aide sur les outils" non bloquante
   - **Context:** Permettre à l'utilisateur de garder l'aide ouverte pendant qu'il travaille.
   - **Spec:** Remplacer la boîte de dialogue modale par une fenêtre non modale (qui reste au premier plan). Changer le bouton "Ok" en "Fermer".
   - **Acceptance:** On peut interagir avec la fenêtre principale de l'application pendant que la fenêtre "Aide sur les outils" est ouverte.
 
-- [ ] **[TASK-021]** Interface de la fonction de réglage
+- [ ] **[TASK-022]** Interface de la fonction de réglage
   - **Context:** Permettre à l'utilisateur de régler les paramètres de l'image de manière intuitive.
   - **Spec:**
     - Remplacer le bloc de contrôle précédent par un bouton de mode de réglage trapézoïdal dédié, lorsque la fonctionnalité n'est pas activée.
@@ -26,7 +21,7 @@
     - Les modifications doivent être visibles en temps réel.
   - **Acceptance:** L'utilisateur peut ajuster les paramètres trapézoïdaux de l'image via l'interface du menu de droite, ainsi qu'avec les touches de direction, et voir les changements immédiatement.
 
-- [ ] **[TASK-022]** Intégrer les différentes polices (`..\src\iat\resources\fonts`) dans l'outil d'annotation pour le texte des étiquettes.
+- [ ] **[TASK-023]** Intégrer les différentes polices (`..\src\iat\resources\fonts`) dans l'outil d'annotation pour le texte des étiquettes.
   - **Context:** Permettre à l'utilisateur de choisir parmi différentes polices pour le texte des étiquettes dans l'outil d'annotation.
   - **Spec:**
     - Intégrer toutes les polices disponibles dans le dossier `..\src\iat\resources\fonts`.
@@ -41,8 +36,11 @@ Rédiger une spécification détaillée pour chaque tâche en cours de développ
 
 > Tâches non spécifiées, à affiner avant passage dans "Next". L'agent IA ne doit pas traiter cette section de son propre chef.
 
-- [ ] Outil Loupe : Toujours afficher les boutons + et - pour la rotation libre (corriger la désactivation à +/- 180°).
-- [ ] Exporter : Ne pas permettre de saisir une valeur supérieure à la largeur ou hauteur maximale de l'image source.
+- [ ] **[TASK-024]** Outil Loupe : Toujours afficher les boutons + et - pour la rotation libre (corriger la désactivation à +/- 180°).
+- [ ] Outil Annotation : Remplissage des formes (Rectangle/Cercle)
+  - **Context:** Permettre de colorer le fond des formes géométriques.
+  - **Spec:** Ajouter une propriété au panneau de droite, active pour les outils rectangle et cercle, permettant le remplissage de la forme avec choix de couleur. Synchroniser l'état (grisé/actif) en fonction de l'outil.
+  - **Acceptance:** La couleur de remplissage est modifiable via l'UI et sauvegardée dans le fichier JSON.
 - [ ] Exporter : Ajouter l'option de marge blanche automatique autour des objets débordants et mettre à jour les dimensions en temps réel.
 - [ ] Documentation : Documenter la contribution au projet, la configuration CI/CD GitLab/Koda et l'ajout d'un serveur runner externe.
 - [ ] Permettre de zoomer sur l'image avec la molette de la souris ou Ctrl + molette.
@@ -174,3 +172,15 @@ Rédiger une spécification détaillée pour chaque tâche en cours de développ
     - Si la taille dépasse celle de l'image originale, afficher un message d'erreur ou ajuster automatiquement la taille maximale.
   - **Acceptance:** L'utilisateur ne peut pas exporter une image avec des dimensions supérieures à celles de l'image originale.
   - **Résolu:** référence = dimensions de l'image source (`_export_max_width()` / `_export_max_height()`, plafond historique 20000 px sans image). Toute largeur/hauteur saisie au-delà de la source déclenche une erreur modale (`QMessageBox.warning` via `_reject_export_size()`) suivie du reclamp de la valeur, la hauteur/largeur dérivée restant proportionnelle ; un préréglage plus large que la source est refusé de la même manière (bouton resynchronisé). Au chargement d'une image, `_clamp_export_size_to_source()` reclamp silencieusement les spin boxes (`blockSignals` pour ne pas déclencher `auto_save_recipe` sur un état partiel, avant `compute_associated_paths` pour que le suffixe `-xWIDTH` reflète la valeur réelle) ; un ancien JSON surdimensionné est corrigé sans modal à l'ouverture, sans réécriture immédiate, et le premier changement utilisateur sauvegarde l'état complet avec les valeurs contraintes (régression TASK-004 couverte). Filet de sécurité moteur : `apply_recipe()` borne la demande puis garantit que le rendu final tient dans les dimensions triées de la source (un quart de tour reste autorisé). Tests : `tests/unit/test_export_size_limits.py` (8 tests), gardes moteur dans `tests/unit/test_image_processor.py`, préréglages valides réadaptés dans `tests/unit/test_editing_features.py`, nom d'export `-xWIDTH` ajusté dans `tests/unit/test_qt_editor.py`.
+
+- [x] **[TASK-019]** Depuis le menu "Export" : proposer deux boutons cote à cote "JPEG" et "TIFF", qui permettent à l'utilisateur de choisir le format d'exportation de l'image. Pour toute nouvelle image, le format par défaut est sélectionné (JPEG). Lorsque l'on choisit un format, le bouton correspondant est activé et les autres sont désactivés pour indiquer le format sélectionné, et le fichier JSON sauvegarde cette information. Mettre à jour la documentation en rapportant les explications sur le choix du format d'image (voir le paragraphe "Comparaison des formats d'image : JPEG vs TIFF" dans le README).
+  - **Context:** L'utilisateur doit pouvoir choisir le format d'exportation de l'image directement depuis le menu "Export".
+  - **Spec:** Ajouter deux boutons "JPEG" et "TIFF" dans le menu "Export", gérer l'état activé/désactivé des boutons en fonction du format sélectionné, et sauvegarder cette information dans le fichier JSON.
+  - **Acceptance:** Le format sélectionné est correctement reflété dans l'UI et sauvegardé dans le fichier JSON.
+  - **Résolu:** deux boutons « JPEG » / « TIFF » ajoutés dans le panneau « Exporter l'image », après les préréglages (TASK-008). Sélection **exclusive sans checkbox** : les deux boutons restent cliquables et l'état est rendu par une propriété dynamique `exportFormatActive` stylée dans les trois thèmes (`themes/*.qss`) — bouton actif mis en avant (accent), bouton au repos légèrement grisé. Le format est sérialisé dans `export.format` de la recette JSON (`ProcessingRecipe.export_format`, défaut `"jpeg"`, rétrocompatible : un ancien JSON sans la clé reste en JPEG) ; `normalize_export_format()` accepte `jpg`/`tif`/casse mixte. Toute nouvelle image repart en JPEG, puis la valeur est restaurée depuis le JSON associé (même mécanisme que le compteur, TASK-017). Le moteur `process_image_with_recipe()` enregistre en TIFF sans perte (LZW) ou en JPEG qualité 95 ; `compute_associated_paths()` et `_suggest_export_name()` suivent l'extension `.jpg`/`.tif` et la boîte de dialogue propose le bon filtre. Documentation : README (renvoi vers la comparaison JPEG vs TIFF), `docs/format-recette-json.md` (§3, §7, §8, §9, §10). Tests : `tests/unit/test_export_format.py` (20 tests).
+
+- [x] **[TASK-020]** Ajouter dans le panneau d'exportation l'estimation de la taille du fichier en fonction du format d'exportation (JPEG ou TIFF) et de la taille de l'image choisie par l'utilisateur.
+  - **Context:** L'utilisateur souhaite connaître la taille estimée du fichier avant de l'exporter.
+  - **Spec:** Calculer la taille estimée du fichier en fonction du format d'exportation sélectionné (JPEG ou TIFF) et de la taille de l'image. Afficher cette estimation dans le panneau d'exportation.
+  - **Acceptance:** L'utilisateur voit une estimation précise de la taille du fichier avant de procéder à l'exportation.
+  - **Résolu:** nouvelle ligne « Taille estimée » dans le panneau « Export », insérée entre le format et le bouton d'export (`QFormLayout.addRow`, même style que les autres lignes). L'estimation réutilise **exactement** le pipeline d'export : `estimate_export_size()` (`image_processor.py`) rejoue `apply_recipe()` sur l'image source pleine résolution puis encode via `_save_to_buffer()`, qui applique les mêmes paramètres Pillow que `_save_with_format()` (JPEG qualité 95 / TIFF LZW) — la valeur affichée correspond à l'octet près au fichier exporté (tests le vérifient en encodant réellement l'export). Le calcul est **asynchrone** (classe `ExportSizeEstimator(QThread)`), déclenché par un **debounce ~300 ms** (`QTimer`) sur tout changement de largeur/hauteur/format/préréglage ou chargement d'image ; les résultats obsolètes sont ignorés grâce à un jeton de génération. États affichés : « Calcul… », valeur localisée en français via `format_file_size()` (unités adaptatives o/Ko/Mo/Go, séparateur décimal virgule, ex. `38,9 Mo`), « ≈ » tant que la valeur n'est pas exacte et « — » si aucune image ou dimensions invalides. Le libellé « Taille estimée » n'est pas sérialisé (valeur dérivée). Traduction anglaise ajoutée (`translations/en.json`). Tests : `tests/unit/test_export_size_estimate.py` (14 tests).

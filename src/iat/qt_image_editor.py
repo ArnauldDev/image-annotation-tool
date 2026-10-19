@@ -24,7 +24,7 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(project_root))
 
 from PIL import Image
-from PyQt6.QtCore import QItemSelectionModel, QPoint, QPointF, QRectF, QSize, QSettings, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QItemSelectionModel, QPoint, QPointF, QRectF, QSize, QSettings, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -82,6 +82,8 @@ from PyQt6.QtSvg import QSvgRenderer
 
 from iat.config import AppConfig, config, load_dotenv, update_config_in_place
 from iat.image_processor import (
+    DEFAULT_EXPORT_FORMAT,
+    EXPORT_FORMATS,
     LABEL_BACKGROUND_RGB,
     Annotation,
     LoupeSpec,
@@ -89,10 +91,14 @@ from iat.image_processor import (
     apply_brightness_contrast,
     apply_trapezoid_correction,
     compute_associated_paths,
+    estimate_export_size,
+    export_extension,
+    format_file_size,
     load_image,
     make_preview,
     next_annotation_id,
     next_loupe_id,
+    normalize_export_format,
     process_image_with_recipe,
     rotate_image,
 )
@@ -107,8 +113,8 @@ APP_LOGO_SIZE = 220  # modifier uniquement cette valeur pour changer la taille d
 
 #: Application metadata surfaced in the "À propos" dialog.
 APP_NAME = "Image Annotation Tool (IAT)"
-APP_VERSION = "1.0.0"
-APP_LICENSE = "Apache License 2.0"
+APP_VERSION = "1.0.1"
+APP_LICENSE = "GNU GPLv3"
 APP_SOURCE = "https://src.koda.cnrs.fr/cbi-plateau-mecatronique/ressources/image-annotation-tool/"
 APP_LAB_INFO = (
     "Arnauld BIGANZOLI\n"
@@ -574,8 +580,8 @@ class ImageCanvas(QWidget):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-10-18
-        @version 13
+        @modified 2026-10-19
+        @version 15
 
         @param parent
 
@@ -674,8 +680,8 @@ class ImageCanvas(QWidget):
 
         @author ArnauldDev
         @created 2026-09-23
-        @modified 2026-09-26
-        @version 9
+        @modified 2026-10-19
+        @version 11
 
         @param value
 
@@ -2730,6 +2736,66 @@ class ImageCanvas(QWidget):
             window.apply_rotation(-theta_deg, absolute=False)
 
 
+class ExportSizeEstimator(QThread):
+    """Calcule en arrière-plan la taille exacte du fichier d'export (TASK-020).
+
+    Le calcul rejoue la recette complète sur l'image source via
+    :func:`estimate_export_size`, c'est-à-dire exactement le pipeline de
+    l'export réel. Le résultat est publié sur le thread UI par le signal
+    ``estimated``, accompagné du jeton de génération de la demande pour
+    ignorer proprement les résultats devenus obsolètes (une nouvelle demande
+    remplace la précédente sans l'interrompre de force).
+    """
+
+    #: (jeton de génération, taille en octets) — ``taille=None`` si indisponible.
+    estimated = pyqtSignal(int, object)
+
+    def __init__(
+        self,
+        generation: int,
+        recipe: ProcessingRecipe,
+        image: Image.Image | None,
+        parent: QWidget | None = None,
+    ) -> None:
+        """
+        Description:
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @param generation  jeton identifiant la demande (annulation logique)
+        @param recipe  recette complète à évaluer
+        @param image  image source pleine résolution (évite un rechargement disque)
+        @param parent
+
+        @returns
+        """
+        super().__init__(parent)
+        self._generation = generation
+        self._recipe = recipe
+        self._image = image
+
+    def run(self) -> None:  # type: ignore[override]
+        """
+        Description: Encode la recette en mémoire et publie la taille obtenue (thread de travail).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        try:
+            size = estimate_export_size(self._recipe, image=self._image)
+        except Exception as err:  # noqa: BLE001 - l'UI affichera « — »
+            print(f"Erreur estimation taille d'export: {err}")
+            size = None
+        self.estimated.emit(self._generation, size)
+
+
 class ImageEditorWindow(QMainWindow):
     """Main application window: a professional-leaning image annotation and
     documentation tool built around a JSON-scriptable processing recipe.
@@ -2752,8 +2818,8 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-26
-        @version 23
+        @modified 2026-10-19
+        @version 25
 
         @returns
         """
@@ -2787,6 +2853,14 @@ class ImageEditorWindow(QMainWindow):
         #: Guards against feedback loops while width/height export spin boxes
         #: resync each other to preserve the image's aspect ratio.
         self._sync_export_size_guard = False
+        #: Output image format chosen in the "Export" panel (TASK-019). Reset to
+        #: JPEG for every new image unless the associated recipe says otherwise.
+        self.export_format: str = DEFAULT_EXPORT_FORMAT
+        #: Taille de fichier estimée (TASK-020) : debounce et calcul asynchrone
+        #: pour ne jamais bloquer le thread UI.
+        self._estimate_timer: QTimer | None = None
+        self._estimate_worker: ExportSizeEstimator | None = None
+        self._estimate_generation = 0
         #: Colour used to tint the SVG icons, provided by the active theme.
         self._icon_color = QColor("#444444")
         self._icon_checked_color: QColor | None = None
@@ -3254,8 +3328,8 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-23
-        @modified 2026-09-26
-        @version 9
+        @modified 2026-10-19
+        @version 11
 
         @param code
         @param persist  remember the choice for the next sessions
@@ -4062,7 +4136,7 @@ class ImageEditorWindow(QMainWindow):
             (TOOL_ROTATE_LINE, None, "Transformation", TOOL_DESCRIPTIONS[TOOL_ROTATE_LINE][1]),
             (TOOL_TEXT, None, "Annotation", "Étiquettes, rectangles, cercles et lignes fléchées."),
             (TOOL_LOUPE, None, "Outil loupe", TOOL_DESCRIPTIONS[TOOL_LOUPE][1]),
-            ("export", self.export_action, "Exporter l'image", "Régler la taille puis exporter l'image annotée en JPEG."),
+            ("export", self.export_action, "Exporter l'image", "Régler le format et la taille puis exporter l'image annotée (JPEG ou TIFF)."),
         )
         for key, shared_action, label, help_text in entries:
             if shared_action is not None:
@@ -5781,10 +5855,38 @@ class ImageEditorWindow(QMainWindow):
         self.height_spin.setValue(800)
         self.height_spin.valueChanged.connect(self._on_export_height_changed)
         export_layout.addRow("Hauteur (px)", self.height_spin)
+
+        # Deux boutons côte à côte pour le format d'export (TASK-019). Ils
+        # restent cliquables : la sélection est exclusive et rendue par un état
+        # visuel actif / repos (propriété QSS « exportFormatActive »), sans
+        # checkbox ni bouton coché.
+        self.export_format_buttons: dict[str, QPushButton] = {}
+        format_row = QHBoxLayout()
+        for export_format in EXPORT_FORMATS:
+            format_button = QPushButton(export_format.upper())
+            format_button.setToolTip(self._export_format_tooltip(export_format))
+            format_button.clicked.connect(
+                lambda _checked, fmt=export_format: self._apply_export_format(fmt)
+            )
+            format_row.addWidget(format_button)
+            self.export_format_buttons[export_format] = format_button
+        export_layout.addRow(tr("Format"), format_row)
+
+        # Estimation de la taille du fichier d'export (TASK-020) : valeur
+        # mise à jour en arrière-plan après stabilisation des paramètres.
+        self.estimated_size_label = QLabel("—")
+        self.estimated_size_label.setToolTip(
+            "Taille estimée du fichier exporté, calculée à partir des dimensions "
+            "et du format sélectionnés (la valeur « ≈ » indique une estimation "
+            "en cours de calcul exact)."
+        )
+        export_layout.addRow(tr("Taille estimée"), self.estimated_size_label)
+
         self.export_button = QPushButton("Exporter l'image annotée")
         self.export_button.clicked.connect(self.export_image)
         export_layout.addRow(self.export_button)
         self._sync_export_preset_buttons(self.width_spin.value())
+        self._sync_export_format_buttons()
 
         transformation_page = QWidget()
         transformation_layout = QVBoxLayout(transformation_page)
@@ -6038,12 +6140,12 @@ class ImageEditorWindow(QMainWindow):
 
     def load_source_image(self, path: str | Path) -> None:
         """
-        Description: Load the full-resolution source image and derive a fluid preview. The export size is silently clamped to the source dimensions (TASK-018). The circle numbering counter is reset to 1, then restored from the associated recipe when one exists.
+        Description: Load the full-resolution source image and derive a fluid preview. The export size is silently clamped to the source dimensions (TASK-018). The circle numbering counter is reset to 1 and the export format to JPEG, then both are restored from the associated recipe when one exists.
 
         @author ArnauldDev
         @created 2026-09-20
         @modified 2026-10-19
-        @version 4
+        @version 5
 
         @param path
 
@@ -6051,6 +6153,11 @@ class ImageEditorWindow(QMainWindow):
         """
         self.source_path = Path(path)
         self.original_image = load_image(self.source_path)
+        # Le format d'export repart sur JPEG pour toute nouvelle image ; il sera
+        # restauré depuis la recette JSON plus bas si un fichier associé existe
+        # (continuité de session), comme le compteur de numérotation (TASK-017).
+        self.export_format = DEFAULT_EXPORT_FORMAT
+        self._sync_export_format_buttons()
         # La taille d'export ne peut pas dépasser l'image source : on recale
         # les compteurs en silence (blockSignals, sinon valueChanged
         # déclencherait auto_save_recipe sur un état encore partiel).
@@ -6058,7 +6165,9 @@ class ImageEditorWindow(QMainWindow):
         # « -xWIDTH » du nom d'export proposé reflète la valeur réelle.
         self._clamp_export_size_to_source()
         self.current_json_path, self.default_export_path = compute_associated_paths(
-            self.source_path, export_width=self.width_spin.value() if hasattr(self, "width_spin") else None
+            self.source_path,
+            export_width=self.width_spin.value() if hasattr(self, "width_spin") else None,
+            export_format=self.export_format,
         )
         self.preview_image, self.preview_scale = make_preview(self.original_image)
 
@@ -6130,6 +6239,9 @@ class ImageEditorWindow(QMainWindow):
         # Resynchronise le libellé « Compteur » du volet (la branche recette
         # le fait déjà via apply_recipe_to_ui, pas la branche sans JSON).
         self._sync_numbering_controls()
+        # Taille estimée (TASK-020) : recalculée pour la nouvelle image, une
+        # fois les dimensions/format restaurés depuis la recette éventuelle.
+        self._schedule_estimate()
 
     def refresh_preview(self) -> None:
         """
@@ -6736,6 +6848,7 @@ class ImageEditorWindow(QMainWindow):
         self.width_spin.setValue(width)
         self._sync_export_preset_buttons(self.width_spin.value())
         self.statusBar().showMessage(tr("Largeur d'export :") + f" {width} px")
+        self._schedule_estimate()
 
     def _sync_export_preset_buttons(self, value: int) -> None:
         """
@@ -6757,6 +6870,84 @@ class ImageEditorWindow(QMainWindow):
         for preset, button in getattr(self, "export_preset_buttons", {}).items():
             button.setChecked(preset == value)
 
+    # ------------------------------------------------------------------
+    # Export format (TASK-019)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _export_format_tooltip(export_format: str) -> str:
+        """
+        Description: Tooltip explaining one selectable export format (JPEG vs TIFF), consistent with the README comparison paragraph.
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @param export_format
+
+        @returns
+        """
+        if normalize_export_format(export_format) == "tiff":
+            return tr(
+                "Exporter au format TIFF : compression sans perte, qualité intégrale "
+                "(traitement ultérieur, archivage)."
+            )
+        return tr(
+            "Exporter au format JPEG : compression avec perte, fichier léger "
+            "(partage, publication)."
+        )
+
+    def _sync_export_format_buttons(self) -> None:
+        """
+        Description: Reflect the selected export format on the two buttons: the active one is highlighted, the other stays clickable in a subdued "rest" state (no checked/checkbox state, TASK-019).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        for export_format, button in getattr(self, "export_format_buttons", {}).items():
+            button.setProperty(
+                "exportFormatActive",
+                "true" if export_format == self.export_format else "false",
+            )
+            # Une propriété dynamique n'est prise en compte par la feuille de
+            # style qu'après un repolish explicite du widget.
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.setToolTip(self._export_format_tooltip(export_format))
+
+    def _apply_export_format(self, export_format: str) -> None:
+        """
+        Description: Select the export format from the "Export" panel (exclusive, no checkbox): update the button states, the proposed export name and persist the choice in the recipe (TASK-019).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @param export_format
+
+        @returns
+        """
+        normalized = normalize_export_format(export_format)
+        if normalized == self.export_format:
+            return
+        self.export_format = normalized
+        self._sync_export_format_buttons()
+        if self.source_path is not None:
+            _, self.default_export_path = compute_associated_paths(
+                self.source_path,
+                export_width=self.width_spin.value(),
+                export_format=self.export_format,
+            )
+            self.auto_save_recipe(force=True)
+        format_label = tr("Format d'export :")
+        self.statusBar().showMessage(f"{format_label} {normalized.upper()}")
+        self._schedule_estimate()
+
     def _on_export_width_changed(self, value: int) -> None:
         """
         Description: Keep the export height proportional to the width and reject any width larger than the source image with a modal error (TASK-018).
@@ -6764,7 +6955,7 @@ class ImageEditorWindow(QMainWindow):
         @author ArnauldDev
         @created 2026-09-20
         @modified 2026-10-19
-        @version 2
+        @version 3
 
         @param value
 
@@ -6795,8 +6986,11 @@ class ImageEditorWindow(QMainWindow):
         self._sync_export_size_guard = False
 
         if self.source_path is not None:
-            _, self.default_export_path = compute_associated_paths(self.source_path, export_width=value)
+            _, self.default_export_path = compute_associated_paths(
+                self.source_path, export_width=value, export_format=self.export_format
+            )
             self.auto_save_recipe(force=True)
+        self._schedule_estimate()
 
     def _on_export_height_changed(self, value: int) -> None:
         """
@@ -6832,6 +7026,128 @@ class ImageEditorWindow(QMainWindow):
         self._sync_export_size_guard = False
         if self.source_path is not None:
             self.auto_save_recipe(force=True)
+        self._schedule_estimate()
+
+    # ------------------------------------------------------------------
+    # Estimation de la taille d'export (TASK-020)
+    # ------------------------------------------------------------------
+    def _schedule_estimate(self) -> None:
+        """
+        Description: Programme le recalcul de la taille estimée après un court délai (debounce ~300 ms) pour ne pas encoder à chaque frappe.
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        if not hasattr(self, "estimated_size_label"):
+            return
+        if self.original_image is None:
+            self._show_estimate(None, approximate=False)
+            return
+        # Une nouvelle demande invalide la précédente : le résultat éventuel
+        # déjà en vol sera ignoré grâce au jeton de génération.
+        self._estimate_generation += 1
+        self.estimated_size_label.setText(tr("Calcul…"))
+        if self._estimate_timer is None:
+            self._estimate_timer = QTimer(self)
+            self._estimate_timer.setSingleShot(True)
+            self._estimate_timer.timeout.connect(self._run_estimate)
+        self._estimate_timer.start(300)
+
+    def _run_estimate(self) -> None:
+        """
+        Description: Lance en arrière-plan le calcul exact de la taille du fichier pour les paramètres courants (thread de travail, jamais le thread UI).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        if self.original_image is None:
+            self._show_estimate(None, approximate=False)
+            return
+        if self.width_spin.value() <= 0 or self.height_spin.value() <= 0:
+            self._show_estimate(None, approximate=False)
+            return
+        if self._estimate_worker is not None and self._estimate_worker.isRunning():
+            # Le worker précédent tourne encore : il reste en vie jusqu'à la
+            # fin de l'encodage Pillow, mais son résultat est déjà obsolète.
+            return
+        generation = self._estimate_generation
+        self._estimate_worker = ExportSizeEstimator(
+            generation, self.build_recipe(), self.original_image, self
+        )
+        self._estimate_worker.estimated.connect(self._on_estimate_ready)
+        self._estimate_worker.finished.connect(self._on_estimate_finished)
+        self._estimate_worker.start()
+
+    def _on_estimate_ready(self, generation: int, size_bytes: object) -> None:
+        """
+        Description: Affiche la taille estimée reçue du worker, en ignorant les résultats obsolètes (paramètres modifiés entre-temps).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @param generation  jeton de la demande à laquelle le résultat répond
+        @param size_bytes  taille encodée en octets, ou None si indisponible
+
+        @returns
+        """
+        if generation != self._estimate_generation:
+            return
+        value = size_bytes if isinstance(size_bytes, int) else None
+        self._show_estimate(value, approximate=False)
+
+    def _on_estimate_finished(self) -> None:
+        """
+        Description: Libère la référence au worker terminé et relance un calcul si une demande plus récente a été programmée pendant qu'il travaillait.
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        worker = self._estimate_worker
+        self._estimate_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        # Un changement de paramètres survenu pendant le calcul a fait avancer
+        # le jeton : on relance pour rafraîchir la valeur affichée.
+        if self._estimate_timer is not None and not self._estimate_timer.isActive():
+            delivered = getattr(worker, "_generation", None)
+            if delivered is not None and delivered != self._estimate_generation and self.original_image is not None:
+                self._schedule_estimate()
+
+    def _show_estimate(self, size_bytes: int | None, approximate: bool) -> None:
+        """
+        Description: Met à jour le libellé « Taille estimée » (valeur localisée, « Calcul… » ou « — »), avec l'indicateur « ≈ » tant que la valeur n'est pas exacte.
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @param size_bytes  taille en octets, ou None pour un état indisponible
+        @param approximate  True tant que la valeur n'est pas le résultat exact
+
+        @returns
+        """
+        if not hasattr(self, "estimated_size_label"):
+            return
+        if size_bytes is None:
+            self.estimated_size_label.setText("—")
+            return
+        prefix = "≈ " if approximate else ""
+        self.estimated_size_label.setText(prefix + format_file_size(size_bytes))
 
     # ------------------------------------------------------------------
     # Loupe controls
@@ -7191,12 +7507,12 @@ class ImageEditorWindow(QMainWindow):
 
     def export_image(self) -> None:
         """
-        Description: Ask for the destination and export the annotated image. Overwriting an existing file is confirmed only once, by the save dialog itself; the notification window can be disabled from the "Configuration" menu (the status bar message is always shown).
+        Description: Ask for the destination and export the annotated image in the format selected in the "Export" panel (TASK-019). Overwriting an existing file is confirmed only once, by the save dialog itself; the notification window can be disabled from the "Configuration" menu (the status bar message is always shown).
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-23
-        @version 3
+        @modified 2026-10-19
+        @version 4
 
         @returns
         """
@@ -7207,13 +7523,24 @@ class ImageEditorWindow(QMainWindow):
         # La boîte de dialogue d'enregistrement (native ou Qt) demande déjà
         # confirmation avant d'écraser un fichier existant : aucun second message.
         file_name, _ = QFileDialog.getSaveFileName(
-            self, tr("Exporter l'image"), str(default_dest), "JPEG (*.jpg *.jpeg)"
+            self, tr("Exporter l'image"), str(default_dest), self._export_dialog_filter()
         )
         if not file_name:
             return
 
+        # Le format est piloté par le panneau Export (TASK-019) : on aligne
+        # l'extension du fichier sur le format choisi, sans écraser un suffixe
+        # déjà cohérent (.jpg/.jpeg ou .tif/.tiff).
+        target = Path(file_name)
+        if self.export_format == "tiff":
+            valid_suffixes = {".tif", ".tiff"}
+        else:
+            valid_suffixes = {".jpg", ".jpeg"}
+        if target.suffix.lower() not in valid_suffixes:
+            target = target.with_suffix(export_extension(self.export_format))
+
         recipe = self.build_recipe()
-        output_path = process_image_with_recipe(recipe, file_name)
+        output_path = process_image_with_recipe(recipe, target)
         if self.current_json_path is not None:
             # Garde le fichier JSON des traitements synchronisé avec l'export réalisé.
             recipe.save(self.current_json_path)
@@ -7256,12 +7583,12 @@ class ImageEditorWindow(QMainWindow):
 
     def _suggest_export_name(self) -> str:
         """
-        Description: Propose an export name following nom-de-l-image-iat[-xWIDTH].jpg convention.
+        Description: Propose an export name following nom-de-l-image-iat[-xWIDTH].jpg/.tif convention (extension set by the selected export format, TASK-019).
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-09-20
-        @version 1
+        @modified 2026-10-19
+        @version 2
 
         @returns
         """
@@ -7270,7 +7597,22 @@ class ImageEditorWindow(QMainWindow):
         stem = self.source_path.stem if self.source_path else "export"
         width = self.width_spin.value() if hasattr(self, "width_spin") else None
         suffix = f"-x{int(width)}" if width and int(width) > 0 else ""
-        return f"{stem}-iat{suffix}.jpg"
+        return f"{stem}-iat{suffix}{export_extension(self.export_format)}"
+
+    def _export_dialog_filter(self) -> str:
+        """
+        Description: File-dialog filter matching the export format selected in the "Export" panel (TASK-019).
+
+        @author ArnauldDev
+        @created 2026-10-19
+        @modified 2026-10-19
+        @version 1
+
+        @returns
+        """
+        if self.export_format == "tiff":
+            return tr("Images TIFF") + " (*.tif *.tiff)"
+        return tr("Images JPEG") + " (*.jpg *.jpeg)"
 
     def save_recipe(self) -> None:
         """
@@ -7330,8 +7672,8 @@ class ImageEditorWindow(QMainWindow):
 
         @author ArnauldDev
         @created 2026-09-20
-        @modified 2026-10-18
-        @version 4
+        @modified 2026-10-19
+        @version 5
 
         @returns
         """
@@ -7402,6 +7744,7 @@ class ImageEditorWindow(QMainWindow):
             crop=self.crop_box,
             export_width=self.width_spin.value(),
             export_height=self.height_spin.value(),
+            export_format=self.export_format,
             stroke_width=self.canvas.current_stroke_width,
             circle_counter=self.canvas.circle_counter,
             annotations=annotations,
@@ -7417,7 +7760,7 @@ class ImageEditorWindow(QMainWindow):
         @author ArnauldDev
         @created 2026-09-20
         @modified 2026-10-19
-        @version 5
+        @version 6
 
         @param recipe
 
@@ -7493,6 +7836,17 @@ class ImageEditorWindow(QMainWindow):
             self.height_spin.blockSignals(False)
         if export_clamped:
             self.statusBar().showMessage(tr("Export limité à la taille de l'image source"))
+
+        # Format d'export (TASK-019) : la recette fait foi (un ancien JSON sans
+        # la clé reste en JPEG). Le nom d'export proposé suit l'extension.
+        self.export_format = normalize_export_format(recipe.export_format)
+        self._sync_export_format_buttons()
+        if self.source_path is not None:
+            _, self.default_export_path = compute_associated_paths(
+                self.source_path,
+                export_width=self.width_spin.value(),
+                export_format=self.export_format,
+            )
 
         # Épaisseur du trait
         self.canvas.current_stroke_width = recipe.stroke_width

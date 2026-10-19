@@ -41,7 +41,8 @@ Règles appliquées par `compute_associated_paths()` :
 
 - le suffixe `-raw` (ou `_raw`) est retiré puis remplacé par `-iat` ;
 - une image sans suffixe `-raw` reçoit simplement `-iat` (`photo.png` → `photo-iat.json`) ;
-- le nom d'export proposé ajoute la largeur choisie (`-x1200`) avant l'extension `.jpg`.
+- le nom d'export proposé ajoute la largeur choisie (`-x1200`) avant l'extension ;
+- l'extension suit le format d'export choisi : `.jpg` (JPEG, défaut) ou `.tif` (TIFF).
 
 La recette est enregistrée **dans le même dossier que l'image source**. Elle est rechargée automatiquement à l'ouverture de l'image, créée au premier traitement et synchronisée à chaque modification.
 
@@ -59,7 +60,7 @@ L'éditeur travaille sur un **aperçu réduit** (plus grand côté limité à 16
 | `contrast`      | nombre                       | `1.0`                         | Facteur de contraste (`0.01` à `3.0`)                                                    |
 | `trapezoid`     | liste de 4 nombres           | `[0, 0, 0, 0]`                | Correction trapézoïdale `[haut, bas, gauche, droite]` (fractions de la taille)           |
 | `crop`          | liste de 4 nombres ou `null` | `null`                        | Zone conservée `[x1, y1, x2, y2]` après rotation                                         |
-| `export`        | objet                        | `{width: null, height: null}` | Taille d'export ; si `width` est fourni, la hauteur est déduite (proportions conservées) |
+| `export`        | objet                        | `{width: null, height: null, format: "jpeg"}` | Taille et format d'export ; si `width` est fourni, la hauteur est déduite (proportions conservées) ; `format` vaut `"jpeg"` ou `"tiff"` |
 | `stroke_width`  | entier                       | `3`                           | Épaisseur de trait par défaut                                                            |
 | `circle_counter`| entier                       | `1`                           | Prochain numéro posé par le mode « Numérotation » de l'outil Cercle (voir §4)            |
 | `annotations`   | liste d'objets               | `[]`                          | Annotations vectorielles (voir §4)                                                       |
@@ -138,7 +139,7 @@ L'ordre est modifié dans l'interface par glisser-déposer dans la liste des obj
 4. luminosité / contraste ;
 5. annotations et loupes, selon `layer_order` ;
 6. redimensionnement final (`export`, rééchantillonnage Lanczos) ;
-7. enregistrement JPEG (qualité 95).
+7. enregistrement dans le format choisi (`export.format`) : JPEG (qualité 95) ou TIFF sans perte (compression LZW).
 
 ## 8. Rétrocompatibilité
 
@@ -151,6 +152,7 @@ Les anciennes recettes restent lisibles :
 | `trapezoid` à 2 valeurs `[haut, bas]`         | complété à 4 valeurs `[haut, bas, 0, 0]`                    |
 | champs d'annotation absents                   | valeurs par défaut du tableau §4                            |
 | `layer_order` absent                          | ordre par défaut (§6)                                       |
+| `export.format` absent                        | format par défaut `"jpeg"` (TASK-019)                       |
 
 La propriété Python `ProcessingRecipe.loupe` (première loupe) est conservée pour les anciens scripts.
 
@@ -172,7 +174,8 @@ La propriété Python `ProcessingRecipe.loupe` (première loupe) est conservée 
   "crop": null,
   "export": {
     "width": 1600,
-    "height": 1200
+    "height": 1200,
+    "format": "jpeg"
   },
   "stroke_width": 3,
   "circle_counter": 2,
@@ -274,7 +277,8 @@ from iat.image_processor import ProcessingRecipe, process_image_with_recipe
 recette = ProcessingRecipe.load("images/exemple/photo-carte-electronique-iat.json")
 recette.export_width = 800           # nouvelle largeur, hauteur déduite
 recette.export_height = None
-process_image_with_recipe(recette, "images/exemple/photo-carte-electronique-iat-x800.jpg")
+recette.export_format = "tiff"       # "jpeg" (défaut) ou "tiff" (sans perte)
+process_image_with_recipe(recette, "images/exemple/photo-carte-electronique-iat-x800.tif")
 ```
 
 > [!NOTE]

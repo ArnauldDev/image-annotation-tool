@@ -3,7 +3,7 @@
   Description: Présentation générale, démarrage rapide et documentation de l'application **Image Annotation Tool (IAT)**.
   Developer: ArnauldDev
   Created Date: 2026-08-29
-  Last Modified: 2026-09-30
+  Last Modified: 2026-10-19
 -->
 
 <!-- Badges de statut et version -->
@@ -52,6 +52,7 @@ Chaque étape reste modifiable à tout moment, ce qui permet de se concentrer su
   - [Édition](#édition)
   - [Transformation](#transformation)
   - [Fichiers et export](#fichiers-et-export)
+    - [Comparaison des formats d'image proposés : JPEG vs TIFF](#comparaison-des-formats-dimage-proposés--jpeg-vs-tiff)
   - [Personnalisation](#personnalisation)
 - [Démarrage rapide](#démarrage-rapide)
 - [Convention de nommage](#convention-de-nommage)
@@ -84,7 +85,16 @@ Chaque étape reste modifiable à tout moment, ce qui permet de se concentrer su
 
 - Ouverture par menu, `Ctrl+O`, **glisser-déposer** d'un fichier image sur la fenêtre, ou historique des fichiers récents.
 - Recette `*-iat.json` rechargée automatiquement et **sauvegardée en continu**.
-- Export JPEG haute fidélité depuis l'image source pleine résolution, avec **préréglages de largeur 800 / 1200 / 1920 px** ou taille libre (proportions conservées, rééchantillonnage Lanczos).
+- Export haute fidélité depuis l'image source pleine résolution, au choix en **JPEG** (fichier léger) ou **TIFF** (sans perte), avec **préréglages de largeur 800 / 1200 / 1920 px** ou taille libre (proportions conservées, rééchantillonnage Lanczos). Le format se choisit dans le panneau **Exporter l'image** ; le détail des usages est décrit dans la [comparaison JPEG vs TIFF](#comparaison-des-formats-dimage-proposés--jpeg-vs-tiff).
+- **Estimation de la taille du fichier** affichée en direct dans le panneau **Exporter l'image** (ligne « Taille estimée »), calculée à partir de la largeur, de la hauteur et du format choisis. Le calcul réutilise exactement le moteur d'export (mêmes paramètres d'encodage JPEG/TIFF), s'exécute en arrière-plan pour ne jamais bloquer l'interface, et la valeur annoncée correspond à la taille réelle du fichier produit. Un « ≈ » précède la valeur tant que le calcul exact n'est pas terminé.
+
+#### Comparaison des formats d'image proposés : JPEG vs TIFF
+
+Le choix du format de sortie de votre image depuis notre logiciel de traitement, dépend essentiellement de l'usage final du fichier :
+
+* **Le format JPEG (Joint Photographic Experts Group) :** C'est un format destructif basé sur une compression avec perte. La qualité visuelle peut y être ajustée selon le taux de compression désiré, au prix d'une altération irréversible des données d'origine. Il est donc idéal pour le partage de fichiers légers, l'exportation rapide ou la publication dans un document ou sur un site Internet, où la légèreté du fichier prime sur une fidélité absolue des pixels.
+
+* **Le format TIFF (Tag Image File Format) :** C'est un format non destructif (sans compression ou avec une compression sans perte) qui conserve rigoureusement la valeur et l'intensité originales de chaque pixel. Il garantit une préservation intégrale de la qualité de l'image, ce qui en fait le format recommandé pour le traitement ultérieur, l'archivage ou la soumission de figures dans les publications scientifiques.
 
 ### Personnalisation
 

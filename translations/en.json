@@ -124,6 +124,12 @@
   "Largeur (px)": "Width (px)",
   "Préréglages": "Presets",
   "Hauteur (px)": "Height (px)",
+  "Format": "Format",
+  "Format d'export :": "Export format:",
+  "Exporter au format JPEG : compression avec perte, fichier léger (partage, publication).": "Export as JPEG: lossy compression, lightweight file (sharing, publishing).",
+  "Exporter au format TIFF : compression sans perte, qualité intégrale (traitement ultérieur, archivage).": "Export as TIFF: lossless compression, full quality (further processing, archiving).",
+  "Images JPEG": "JPEG images",
+  "Images TIFF": "TIFF images",
   "Exporter l'image annotée": "Export the annotated image",
   "Effacer l'historique": "Clear history",
   "Historique des fichiers récents effacé.": "Recent files history cleared.",
@@ -154,7 +160,7 @@
   "Ouvrir une image brute à annoter.": "Open a raw image to annotate.",
   "Étiquettes, rectangles, cercles et lignes fléchées.": "Labels, rectangles, circles and arrowed lines.",
   "Outil loupe": "Loupe tool",
-  "Régler la taille puis exporter l'image annotée en JPEG.": "Set the size, then export the annotated image as JPEG.",
+  "Régler le format et la taille puis exporter l'image annotée (JPEG ou TIFF).": "Set the format and size, then export the annotated image (JPEG or TIFF).",
   "Grille": "Grid",
   "Maintenez Ctrl pendant la création ou le déplacement d'un objet pour l'accrocher à la grille ; sans Ctrl, l'objet suit librement la souris.": "Hold Ctrl while creating or moving an object to snap it to the grid; without Ctrl, the object follows the mouse freely.",
   "Proportion": "Proportion",
@@ -222,5 +228,8 @@
   "Choisir un dossier": "Choose a folder",
   "Luminosité et contraste réinitialisés.": "Brightness and contrast reset.",
   "masquée": "hidden",
-  "supprimée.": "deleted."
+  "supprimée.": "deleted.",
+  "Taille estimée": "Estimated size",
+  "Calcul…": "Calculating…",
+  "Taille estimée du fichier exporté, calculée à partir des dimensions et du format sélectionnés (la valeur « ≈ » indique une estimation en cours de calcul exact).": "Estimated size of the exported file, computed from the selected dimensions and format (the \"≈\" value indicates an estimate while the exact size is being computed)."
 }
